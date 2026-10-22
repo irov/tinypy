@@ -90,7 +90,8 @@ typedef struct tinypy_compile_ctx_t {
     /* parsestr encodes the byte literals of a source whose cookie has no
        normal name back through its codec; the ASCII and Latin-1 encoders
        create every string anew. The ASCII one fails on the characters an
-       error handler replaced invalid source bytes with. */
+       error handler replaced invalid source bytes with, which an ASCII
+       string source holds none of. */
     tinypy_bool_t source_literals_encoded;
     tinypy_bool_t source_literals_ascii;
     /* Diagnostics restore their text and offset to the declared encoding

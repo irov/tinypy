@@ -545,6 +545,133 @@ class AttributeEdges(unittest.TestCase):
         type(instance).__delattr__(instance, Name('member'))
         self.assertEqual((getattr(instance, u'member'), hasattr(instance, u'other')), (1, True))
 
+    def test_attribute_wrappers_check_names_as_their_slots_do(self):
+        class Name(str):
+            pass
+        class Plain(object):
+            member = 1
+        class Old:
+            pass
+        class Base(object):
+            pass
+        class Derived(Base):
+            pass
+        for name in (u'member', u'm\xe9', 5):
+            with self.assertRaises(TypeError) as error:
+                type.__getattribute__(Plain, name)
+            self.assertEqual(str(error.exception), "attribute name must be string, not '%s'" % type(name).__name__)
+        self.assertEqual((type.__getattribute__(Plain, Name('member')), object.__getattribute__(Plain(), u'member')), (1, 1))
+        for name in (u'm\xe9', 5, None):
+            for wrapper, arguments in ((type.__setattr__, (int, name, 1)), (type.__delattr__, (int, name))):
+                with self.assertRaises(TypeError) as error:
+                    wrapper(*arguments)
+                self.assertEqual(str(error.exception), "can't set attributes of built-in/extension type 'int'")
+        classobj = type(Old)
+        classobj.__setattr__(Old, Name('added'), 2)
+        self.assertEqual(Old.added, 2)
+        classobj.__delattr__(Old, 'added')
+        self.assertFalse(hasattr(Old, 'added'))
+        for name in (u'added', 5):
+            with self.assertRaises(TypeError) as error:
+                classobj.__setattr__(Old, name, 1)
+            self.assertEqual(str(error.exception), 'attribute name must be a string')
+        for receiver in (Old(), Plain()):
+            with self.assertRaises(TypeError) as error:
+                classobj.__setattr__(receiver, 'added', 1)
+            self.assertEqual(str(error.exception), "descriptor '__setattr__' requires a 'classobj' object but received a '%s'" % type(receiver).__name__)
+        with self.assertRaises(AttributeError) as error:
+            classobj.__delattr__(Old, 'missing')
+        self.assertEqual(str(error.exception), "class Old has no attribute 'missing'")
+        bound = super(Derived, Derived())
+        self.assertIs(type(bound).__getattribute__(bound, u'__class__'), Derived)
+        self.assertIs(type(bound).__getattribute__(bound, Name('__class__')), super)
+        self.assertIs(getattr(bound, u'__class__'), super)
+
+    def test_attribute_assignment_keeps_key_comparison_errors(self):
+        class Key(str):
+            error = ValueError
+            def __hash__(self):
+                return str.__hash__(self)
+            def __eq__(self, other):
+                if Key.error is None:
+                    return str.__eq__(self, other)
+                raise Key.error('eq')
+        class Plain(object):
+            pass
+        class Old:
+            pass
+        def function():
+            pass
+        def targets():
+            instance = Plain()
+            instance.x = 1
+            module = Module('m')
+            module.x = 1
+            function.x = 1
+            return [instance, module, function, weakref.proxy(instance), type('Typed', (object,), {Key('x'): 1})]
+        for target in targets():
+            self.assertRaises(ValueError, setattr, target, Key('x'), 2)
+            self.assertRaises(ValueError, delattr, target, Key('x'))
+        for target in targets()[:3]:
+            self.assertRaises(ValueError, object.__delattr__, target, Key('x'))
+        Key.error = KeyError
+        for target in targets():
+            for function, arguments in ((setattr, (target, Key('x'), 2)), (delattr, (target, Key('x')))):
+                with self.assertRaises(AttributeError) as error:
+                    function(*arguments)
+                self.assertEqual(str(error.exception), 'x')
+        Key.error = ValueError
+        old = Old()
+        old.x = 1
+        with self.assertRaises(AttributeError) as error:
+            delattr(old, Key('x'))
+        self.assertEqual(str(error.exception), "Old instance has no attribute 'x'")
+        Plain.x = 1
+        delattr(Plain, Key('x'))
+        self.assertFalse(hasattr(Plain, 'x'))
+        for raised, deleted in ((ValueError, ValueError), (KeyError, AttributeError)):
+            for name in ('__module__', '__abstractmethods__'):
+                Key.error = None
+                Typed = type('Typed', (object,), {Key(name): frozenset()})
+                Key.error = raised
+                self.assertRaises(raised, setattr, Typed, name, frozenset())
+            self.assertRaises(deleted, delattr, Typed, name)
+
+    def test_base_exception_owns_its_attribute_wrappers(self):
+        class Plain(object):
+            pass
+        class Error(Exception):
+            pass
+        class Mixed(object):
+            __getattribute__ = BaseException.__getattribute__
+        class Shared(object):
+            __setattr__ = BaseException.__setattr__
+        error = Error()
+        proxy = weakref.proxy(error)
+        for name in ('__getattribute__', '__setattr__', '__delattr__'):
+            self.assertIs(getattr(BaseException, name).__objclass__, BaseException)
+            self.assertIs(getattr(object, name).__objclass__, object)
+        failures = ((BaseException.__setattr__, (Plain(), 'x', 1)), (BaseException.__getattribute__, (5, 'real')),
+                    (BaseException.__delattr__, (Plain(), 'x')), (BaseException.__setattr__, (proxy, 'x', 1)))
+        for wrapper, arguments in failures:
+            with self.assertRaises(TypeError) as caught:
+                wrapper(*arguments)
+            self.assertEqual(str(caught.exception), "descriptor '%s' requires a 'exceptions.BaseException' object but received a '%s'" % (wrapper.__name__, type(arguments[0]).__name__))
+        with self.assertRaises(TypeError) as caught:
+            super(Error, proxy).__getattribute__('args')
+        self.assertEqual(str(caught.exception), "descriptor '__getattribute__' for 'exceptions.BaseException' objects doesn't apply to 'weakproxy' object")
+        with self.assertRaises(TypeError) as caught:
+            Mixed().x
+        self.assertEqual(str(caught.exception), "descriptor '__getattribute__' for 'exceptions.BaseException' objects doesn't apply to 'Mixed' object")
+        shared = Shared()
+        shared.x = 1
+        self.assertEqual(shared.__dict__, {'x': 1})
+        BaseException.__setattr__(error, u'x', 1)
+        object.__setattr__(error, 'y', 2)
+        self.assertEqual((BaseException.__getattribute__(error, u'x'), Error.__getattribute__(error, 'y'), error.args), (1, 2, ()))
+        BaseException.__delattr__(error, 'x')
+        self.assertFalse(hasattr(error, 'x'))
+
     def test_methods_and_super_objects_under_object_getattribute(self):
         class Base(object):
             member = 'base'

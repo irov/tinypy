@@ -752,34 +752,6 @@ void tinypy_internal_string_set_interned(tinypy_value_t *value, tinypy_bool_t in
 }
 
 //////////////////////////////////////////////////////////////////////////
-static size_t __tinypy_internal_utf8_code_point_count(const uint8_t *bytes, size_t size) {
-    size_t offset = 0U;
-    size_t code_point_count = 0U;
-
-    while (offset < size) {
-        uint8_t first = bytes[offset];
-        size_t width;
-
-        if (first <= 0x7fU) {
-            width = 1U;
-        }
-        else if (first < 0xe0U) {
-            width = 2U;
-        }
-        else if (first < 0xf0U) {
-            width = 3U;
-        }
-        else {
-            width = 4U;
-        }
-
-        offset += width;
-        code_point_count += 1U;
-    }
-
-    return code_point_count;
-}
-//////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_value_belongs_to(const tinypy_vm_t *vm, const tinypy_value_t *value) {
     tinypy_bool_t belongs = value != NULL && TINYPY_VALUE_VM(value) == vm;
     return belongs;
@@ -933,9 +905,7 @@ static TINYPY_ALWAYS_INLINE tinypy_value_t *__tinypy_internal_unicode_from_utf8(
         return TINYPY_RET(cached);
     }
 
-    code_point_count = __tinypy_internal_utf8_code_point_count(
-        (const uint8_t *)utf8,
-        size);
+    code_point_count = tinypy_internal_utf8_code_point_count((const uint8_t *)utf8, size);
 
     uint8_t *payload;
     tinypy_value_t *result = checked != 0

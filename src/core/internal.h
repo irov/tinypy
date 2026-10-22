@@ -2065,6 +2065,9 @@ struct tinypy_vm_t {
     tinypy_allocator_t allocator;
     tinypy_host_t host;
     tinypy_bool_t has_host;
+    /* The word steps the quadratic long kernels take before they poll the
+       host for an interrupt again. */
+    size_t long_poll_steps;
     /* The host returned NULL for a request; a bootstrap that saw it fails. */
     tinypy_bool_t allocation_refused;
     size_t max_heap_bytes;
@@ -2150,6 +2153,11 @@ struct tinypy_vm_t {
        a handler normalizes with a call to the class; set aside and restored,
        the exception counts as normalized. */
     tinypy_bool_t raised_unnormalized;
+    /* Advances with every exception raised and every AttributeError that an
+       optional attribute lookup leaves unraised, each of which replaces the
+       current exception in CPython: an error kept pending aside, as
+       builtin_map keeps that of a length hint, is gone once it moves. */
+    uint64_t raised_epoch;
     tinypy_representation_frame_t *representation_frames;
 #if defined(TINYPY_DEBUGGER)
     tinypy_debugger_t debugger;
@@ -2309,6 +2317,37 @@ static inline void __tinypy_internal_call_leave(tinypy_vm_t *vm) {
     vm->evaluation_depth -= 1U;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The interrupt poll of the evaluator: true from poll_interrupt of the host
+   raises KeyboardInterrupt (TINYPY_ERROR_INTERRUPT). */
+tinypy_bool_t tinypy_internal_eval_poll_interrupt(tinypy_vm_t *vm, tinypy_error_t **out_error);
+//////////////////////////////////////////////////////////////////////////
+#define TINYPY_LONG_POLL_STEPS 65536U
+#define TINYPY_LONG_POLL_STRIDE 8U
+//////////////////////////////////////////////////////////////////////////
+/* SIGCHECK of x_mul, x_divrem and long_format: the quadratic long kernels
+   count the word steps they take, and the host is polled for an interrupt
+   once TINYPY_LONG_POLL_STEPS of them have passed. */
+static inline tinypy_bool_t __tinypy_internal_long_poll(tinypy_vm_t *vm, size_t steps, tinypy_error_t **out_error) {
+    if (steps < vm->long_poll_steps) {
+        vm->long_poll_steps -= steps;
+        return TINYPY_TRUE;
+    }
+    vm->long_poll_steps = TINYPY_LONG_POLL_STEPS;
+    tinypy_bool_t running = tinypy_internal_eval_poll_interrupt(vm, out_error);
+    return running;
+}
+//////////////////////////////////////////////////////////////////////////
+/* An outer step of a quadratic loop that takes the given word steps: the
+   steps whose index the stride divides count the whole stride. */
+static inline tinypy_bool_t __tinypy_internal_long_poll_stride(tinypy_vm_t *vm, size_t index, size_t steps, tinypy_error_t **out_error) {
+    if (index % TINYPY_LONG_POLL_STRIDE != 0U) {
+        return TINYPY_TRUE;
+    }
+    size_t stride_steps = steps > SIZE_MAX / TINYPY_LONG_POLL_STRIDE ? SIZE_MAX : steps * TINYPY_LONG_POLL_STRIDE;
+    tinypy_bool_t running = __tinypy_internal_long_poll(vm, stride_steps, out_error);
+    return running;
+}
+//////////////////////////////////////////////////////////////////////////
 
 void *tinypy_internal_vm_allocate(tinypy_vm_t *vm, size_t size);
 void *tinypy_internal_vm_reallocate(tinypy_vm_t *vm, void *memory, size_t old_size, size_t new_size);
@@ -2406,6 +2445,7 @@ size_t tinypy_internal_utf8_decode(const uint8_t *bytes, size_t size, uint32_t *
 size_t tinypy_internal_utf8_invalid_span(const uint8_t *bytes, size_t size);
 size_t tinypy_internal_utf8_encode(uint32_t code_point, uint8_t bytes[4]);
 size_t tinypy_internal_ascii_prefix(const uint8_t *bytes, size_t size);
+size_t tinypy_internal_utf8_code_point_count(const uint8_t *bytes, size_t size);
 /* Whether the implicit unicode conversion of a str runs the default codec:
    an ASCII str holds its own UTF-8, which no error handler sees. */
 static inline tinypy_bool_t __tinypy_internal_text_needs_decode(const tinypy_value_t *value) {
@@ -2642,6 +2682,8 @@ int32_t tinypy_internal_comparison_fallback_order(tinypy_value_t *left, tinypy_v
 /* Whether a three-way order satisfies a rich comparison operation. */
 int32_t tinypy_internal_comparison_order_holds(tinypy_compare_operation_e operation, int32_t order);
 tinypy_bool_t tinypy_internal_compare_three_way(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_compare_dict_order(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_compare_cmp_argument(tinypy_value_t *self, tinypy_value_t *other, tinypy_bool_t family, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_compare_equal_checked(tinypy_value_t *left, tinypy_value_t *right, tinypy_bool_t *out_equal, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_comparison_is_exact_builtin(const tinypy_value_t *value);
 int32_t tinypy_internal_truth_builtin(tinypy_value_t *value, tinypy_error_t **out_error);
@@ -2702,7 +2744,18 @@ tinypy_value_t *tinypy_internal_text_codec(tinypy_vm_t *vm, tinypy_value_t *text
 tinypy_bool_t tinypy_internal_text_codec_arguments(tinypy_vm_t *vm, tinypy_bool_t decode, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_value_t **out_encoding, tinypy_value_t **out_errors, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_keyword_as_string(tinypy_vm_t *vm, tinypy_value_t *keyword, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_object_encode_attribute_name(tinypy_value_t *key, tinypy_error_t **out_error);
-tinypy_bool_t tinypy_internal_object_check_attribute_name(tinypy_vm_t *vm, tinypy_value_t *name, tinypy_error_t **out_error);
+/* The TypeError of an attribute name of another kind than a check takes. */
+void tinypy_internal_object_attribute_name_error(tinypy_vm_t *vm, tinypy_value_t *name, tinypy_error_t **out_error);
+/* PyObject_GetAttr and PyObject_SetAttr take a str or a unicode name. */
+static inline tinypy_bool_t __tinypy_internal_object_check_attribute_name(tinypy_vm_t *vm, tinypy_value_t *name, tinypy_error_t **out_error) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(name);
+
+    if (kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) {
+        return TINYPY_TRUE;
+    }
+    tinypy_internal_object_attribute_name_error(vm, name, out_error);
+    return TINYPY_FALSE;
+}
 tinypy_bool_t tinypy_internal_object_callable(tinypy_value_t *value);
 tinypy_bool_t tinypy_internal_codecs_validate_name(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_error_t **out_error);
 /* The codecs the runtime implements, by encodings module. */
@@ -2991,6 +3044,31 @@ static inline tinypy_bool_t __tinypy_internal_object_defines_dispatch(tinypy_val
     return memoized;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The items callback of the slot wrappers that a host native type publishes
+   for the callbacks of its spec. */
+tinypy_value_t *tinypy_internal_native_slot_wrapper_call(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error);
+/* The attribute that the special method lookups of value read for such a
+   slot wrapper, attribute, found under key: attribute itself, or when it
+   applies to value, that of the nearest base of its type which is no host
+   native type. */
+tinypy_value_t *tinypy_internal_native_slot_wrapper_special(tinypy_value_t *attribute, tinypy_value_t *value, tinypy_value_t *key);
+//////////////////////////////////////////////////////////////////////////
+/* The special method of the type of a new-style value, borrowed. A slot
+   wrapper that a host native type publishes for a callback of its spec
+   stands for the slot of the type when it applies to the value, so the
+   special method lookups read the attribute of its nearest base that is no
+   host native type instead, the one a spec without the callback keeps: a
+   host native subtype keeps the slots of its own spec. */
+static inline tinypy_value_t *__tinypy_internal_object_special_attribute(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_value_t *key) {
+    tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, value->type, key);
+
+    if (attribute == NULL || attribute->type != vm->native_wrapper_descriptor_type || TINYPY_NATIVE_FUNCTION_OBJECT(attribute)->items_callback != tinypy_internal_native_slot_wrapper_call) {
+        return attribute;
+    }
+    tinypy_value_t *special = tinypy_internal_native_slot_wrapper_special(attribute, value, key);
+    return special;
+}
+//////////////////////////////////////////////////////////////////////////
 static inline tinypy_bool_t __tinypy_internal_object_overrides_dispatch(tinypy_value_t *value, uint64_t specials) {
     if (__tinypy_internal_object_known_dispatch(value, specials) != 0) {
         tinypy_bool_t overrides = (value->type->dispatch_overrides & specials) != 0U ? TINYPY_TRUE : TINYPY_FALSE;
@@ -3149,6 +3227,7 @@ void tinypy_internal_native_instance_release_references(tinypy_value_t *value, t
 void tinypy_internal_native_instance_destroy(tinypy_value_t *value);
 void tinypy_internal_native_instance_finalize(tinypy_value_t *value);
 void tinypy_internal_native_instance_finalized_error(tinypy_value_t *instance, tinypy_error_t **out_error);
+tinypy_type_t *tinypy_internal_native_type_new_key(tinypy_value_t *name, const tinypy_type_t *const *bases, size_t base_count, tinypy_value_t *namespace_dict, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error);
 void tinypy_internal_callable_descriptor_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 tinypy_value_t *tinypy_internal_static_method_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_value_t *owner, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_class_method_get(tinypy_value_t *descriptor, tinypy_value_t *instance, tinypy_value_t *owner, tinypy_error_t **out_error);
@@ -3185,9 +3264,16 @@ tinypy_value_t *tinypy_internal_object_generic_get_attr_key(tinypy_value_t *valu
    way to the hook fetched before, which the call consumes. */
 tinypy_value_t *tinypy_internal_object_get_attr_hook_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t *getattr_hook, tinypy_error_t **out_error);
 int32_t tinypy_internal_object_get_optional_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t **out_value, tinypy_error_t **out_error);
+int32_t tinypy_internal_object_has_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_object_set_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t *attribute_value, tinypy_error_t **out_error);
 void tinypy_internal_object_make_attribute_error_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error);
 void tinypy_internal_make_attribute_name_error(tinypy_vm_t *vm, tinypy_value_t *name, tinypy_error_t **out_error);
+/* PyDict_DelItem of an attribute, as PyObject_GenericSetAttr deletes one: a
+   missing key or a KeyError of a key comparison is AttributeError(name), and
+   any other error of a comparison propagates, as when it stores one. */
+tinypy_bool_t tinypy_internal_object_delete_dict_attribute(tinypy_vm_t *vm, tinypy_value_t *dict, tinypy_value_t *name, tinypy_error_t **out_error);
+/* The refusal of type_setattro for a static type. */
+void tinypy_internal_object_immutable_type_error(tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_object_set_attr_protocol_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t *attribute_value, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_object_delete_attr_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error);
 tinypy_bool_t tinypy_internal_object_delete_attr_protocol_key(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error);
@@ -3265,6 +3351,9 @@ size_t tinypy_internal_double_format_text(double magnitude, uint8_t conversion, 
 tinypy_value_t *tinypy_internal_string_format_value(tinypy_vm_t *vm, tinypy_value_t *value, int32_t conversion, const uint8_t *spec, size_t spec_size, tinypy_bool_t spec_unicode, tinypy_bool_t *out_unicode, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_string_format_object(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_value_t *format_spec, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_string_format_builtin_value(tinypy_vm_t *vm, tinypy_value_t *value, int32_t conversion, const uint8_t *spec, size_t spec_size, tinypy_bool_t spec_unicode, tinypy_bool_t *out_unicode, tinypy_error_t **out_error);
+/* type(value).__format__(spec) of a builtin str, unicode or number value
+   and a str or unicode spec. */
+tinypy_value_t *tinypy_internal_string_format_builtin(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_value_t *spec, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_xrange_new(tinypy_vm_t *vm, int64_t start, int64_t step, size_t length);
 int64_t tinypy_internal_xrange_item_value(const tinypy_xrange_object_t *range, size_t index);
 int64_t tinypy_internal_xrange_stop_value(const tinypy_xrange_object_t *range);

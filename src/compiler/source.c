@@ -1202,6 +1202,11 @@ tinypy_bool_t tinypy_internal_compiler_source_prepare(tinypy_compile_ctx_t *ctx,
     if (ctx->source_is_file != 0 || (codec != TINYPY_INTERNAL_BUILTIN_CODEC_ASCII && (codec != TINYPY_INTERNAL_BUILTIN_CODEC_UTF8 || fast_path != 0))) {
         return TINYPY_TRUE;
     }
+    /* An ASCII string decodes to itself: no literal holds a replacement. */
+    if (tinypy_internal_ascii_prefix(output, output_size) == output_size) {
+        ctx->source_literals_ascii = TINYPY_FALSE;
+        return TINYPY_TRUE;
+    }
     tinypy_bool_t utf8 = codec == TINYPY_INTERNAL_BUILTIN_CODEC_UTF8 ? TINYPY_TRUE : TINYPY_FALSE;
     tinypy_value_t *encoding = TINYPY_RET(utf8 != 0 ? ctx->vm->internal_codec_utf8_name : ctx->vm->internal_codec_ascii_name);
     /* translate_into_utf8 decodes the whole string before tokenizing and

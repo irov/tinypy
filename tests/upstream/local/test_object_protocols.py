@@ -1946,6 +1946,129 @@ class ObjectProtocols(unittest.TestCase):
             copy_reg._extension_registry.pop((1, 1), None)
             copy_reg._inverted_registry.pop(5, None)
 
+    def test_copy_reg_registration_follows_copy_reg_py(self):
+        import copy_reg
+
+        class Registered(object):
+            pass
+
+        class CallAttribute(object):
+            pass
+
+        class Classic:
+            pass
+
+        class Failing(object):
+            def __getattr__(self, name):
+                raise ValueError(name)
+
+        class Interrupting(object):
+            def __getattr__(self, name):
+                raise KeyboardInterrupt(name)
+
+        def reducer(value):
+            return (Registered, ())
+
+        callable_attribute = CallAttribute()
+        callable_attribute.__call__ = reducer
+        calls = []
+        saved = copy_reg.constructor
+        try:
+            copy_reg.pickle(Registered, callable_attribute)
+            self.assertIs(copy_reg.dispatch_table[Registered], callable_attribute)
+            self.assertIs(copy_reg.constructor(callable_attribute), None)
+            self.assert_message(TypeError, 'constructors must be callable', copy_reg.constructor, Classic)
+            self.assert_message(TypeError, 'constructors must be callable', copy_reg.constructor, Failing())
+            self.assert_message(TypeError, 'reduction functions must be callable', copy_reg.pickle, Registered, Failing())
+            self.assertRaises(KeyboardInterrupt, copy_reg.constructor, Interrupting())
+            del copy_reg.dispatch_table[Registered]
+            self.assert_message(TypeError, 'constructors must be callable', copy_reg.pickle, Registered, reducer, 5)
+            self.assertIs(copy_reg.dispatch_table[Registered], reducer)
+            copy_reg.constructor = calls.append
+            copy_reg.pickle(Registered, reducer, Classic)
+            copy_reg.pickle(Registered, reducer, None)
+            self.assertEqual(calls, [Classic])
+            del copy_reg.constructor
+            self.assert_message(NameError, "global name 'constructor' is not defined", copy_reg.pickle, Registered, reducer, Classic)
+        finally:
+            copy_reg.constructor = saved
+            copy_reg.dispatch_table.pop(Registered, None)
+
+    def test_reduce_ex_reads_copy_reg_globals(self):
+        import copy_reg
+
+        class Plain(object):
+            pass
+
+        class FailingState(object):
+            def __nonzero__(self):
+                raise ZeroDivisionError('state')
+
+        class Stateful(object):
+            def __getstate__(self):
+                return FailingState()
+
+        instance = Plain()
+        instance.a = 1
+        saved = (copy_reg._reconstructor, copy_reg._HEAPTYPE)
+        try:
+            del copy_reg._reconstructor
+            self.assert_message(NameError, "global name '_reconstructor' is not defined", instance.__reduce_ex__, 1)
+            self.assert_message(ZeroDivisionError, 'state', Stateful().__reduce_ex__, 0)
+            copy_reg._reconstructor = saved[0]
+            copy_reg._HEAPTYPE = 0
+            self.assert_message(TypeError, "can't pickle Plain objects", instance.__reduce_ex__, 1)
+            del copy_reg._HEAPTYPE
+            self.assert_message(NameError, "global name '_HEAPTYPE' is not defined", instance.__reduce_ex__, 1)
+        finally:
+            copy_reg._reconstructor, copy_reg._HEAPTYPE = saved
+        self.assertEqual(instance.__reduce_ex__(1)[2], {'a': 1})
+
+    def test_reduce_ex_refuses_type_objects(self):
+        class Meta(type):
+            pass
+
+        class Plain(object):
+            pass
+
+        class Custom(object):
+            __metaclass__ = Meta
+
+        class Revived(type):
+            def __getnewargs__(cls):
+                return ('Revived', (object,), {})
+
+        class Restored(object):
+            __metaclass__ = Revived
+
+        for protocol in (0, 1, 2, -1):
+            for value in (Plain, object, type, Meta):
+                self.assert_message(TypeError, "can't pickle type objects", object.__reduce_ex__, value, protocol)
+        self.assert_message(TypeError, "can't pickle Meta objects", object.__reduce_ex__, Custom, 2)
+        self.assertEqual(object.__reduce_ex__(Custom, 1)[1], (Meta, type, Meta))
+        self.assertEqual(object.__reduce_ex__(Restored, 2)[1], (Revived, 'Revived', (object,), {}))
+
+    def test_reduce_ex_skips_slot_names_that_are_not_strings(self):
+        seen = []
+
+        class Key(object):
+            def __repr__(self):
+                seen.append('repr')
+                return 'Key'
+
+        class Slotted(object):
+            __slots__ = ('x',)
+
+            def __getattr__(self, name):
+                seen.append(type(name).__name__)
+                raise AttributeError(name)
+
+        Slotted.__slotnames__ = [Key(), 5, None, u'x', u'\xe9', 'y']
+        instance = Slotted()
+        instance.x = 3
+        self.assertEqual(instance.__reduce_ex__(2)[2], (None, {u'x': 3}))
+        self.assertEqual(sorted(set(seen)), ['str'])
+
     def test_basestring_subclasses_are_not_instantiable(self):
         class Text(basestring):
             pass

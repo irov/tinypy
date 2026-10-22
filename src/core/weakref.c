@@ -433,7 +433,7 @@ static tinypy_value_t *__tinypy_weakref_proxy_get_attribute(tinypy_value_t *prox
 //////////////////////////////////////////////////////////////////////////
 /* PyObject_GetAttr, which checks the name before any lookup. */
 static tinypy_value_t *__tinypy_weakref_referent_attribute(tinypy_value_t *object, tinypy_value_t *name, tinypy_error_t **out_error) {
-    if (tinypy_internal_object_check_attribute_name(TINYPY_VALUE_VM(object), name, out_error) == TINYPY_FALSE) {
+    if (__tinypy_internal_object_check_attribute_name(TINYPY_VALUE_VM(object), name, out_error) == TINYPY_FALSE) {
         return NULL;
     }
     tinypy_value_t *attribute = tinypy_internal_object_get_attr_key(object, name, out_error);
@@ -486,7 +486,7 @@ static tinypy_value_t *__tinypy_weakref_proxy_assign_attribute_method(tinypy_val
         return NULL;
     }
     tinypy_value_t *name = TINYPY_TUPLE_GET(args, 1U);
-    tinypy_bool_t assigned = tinypy_internal_object_check_attribute_name(vm, name, out_error);
+    tinypy_bool_t assigned = __tinypy_internal_object_check_attribute_name(vm, name, out_error);
     if (assigned != TINYPY_FALSE) {
         assigned = count == 2U ? tinypy_internal_object_set_attr_protocol_key(object, name, TINYPY_TUPLE_GET(args, 2U), out_error) : tinypy_internal_object_delete_attr_protocol_key(object, name, out_error);
     }
@@ -1084,6 +1084,41 @@ static tinypy_value_t *__tinypy_weakref_proxy_sequence_method(tinypy_value_t *fu
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* PySequence_GetSlice needs sq_slice or mp_subscript, and
+   PySequence_SetSlice, which proxy_ass_slice calls to delete as well,
+   sq_ass_slice or mp_ass_subscript, which a class has once it defines one of
+   their methods; a classic instance has them all. */
+static tinypy_bool_t __tinypy_weakref_referent_sliceable(tinypy_value_t *object, tinypy_weakref_proxy_sequence_operation_e operation, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(object);
+    const tinypy_type_t *type = object->type;
+
+    if (TINYPY_VALUE_KIND(object) == TINYPY_VALUE_OLD_INSTANCE) {
+        return TINYPY_TRUE;
+    }
+    if (operation == TINYPY_WEAKREF_PROXY_GET_SLICE) {
+        if ((type->mapping_slots != NULL && type->mapping_slots->get_item != NULL) || (type->sequence_slots != NULL && type->sequence_slots->get_item != NULL)
+            || tinypy_internal_object_has_special_key(object, vm->internal_special_getslice_key) != 0 || tinypy_internal_object_has_special_key(object, vm->internal_special_getitem_key) != 0) {
+            return TINYPY_TRUE;
+        }
+    }
+    else if ((type->mapping_slots != NULL && type->mapping_slots->set_item != NULL) || (type->sequence_slots != NULL && type->sequence_slots->set_item != NULL)
+        || tinypy_internal_object_has_special_key(object, vm->internal_special_setslice_key) != 0 || tinypy_internal_object_has_special_key(object, vm->internal_special_delslice_key) != 0
+        || tinypy_internal_object_has_special_key(object, vm->internal_special_setitem_key) != 0 || tinypy_internal_object_has_special_key(object, vm->internal_special_delitem_key) != 0) {
+        return TINYPY_TRUE;
+    }
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_LITERAL("'"),
+        TINYPY_MESSAGE_PART_TYPE_NAME_PRECISION(object, 200U),
+        TINYPY_MESSAGE_PART_LITERAL("' object is unsliceable")
+    };
+
+    if (operation != TINYPY_WEAKREF_PROXY_GET_SLICE) {
+        parts[2] = (tinypy_message_part_t)TINYPY_MESSAGE_PART_LITERAL("' object doesn't support slice assignment");
+    }
+    tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, 3U, out_error);
+    return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
 /* wrap_ssizessizeargfunc and its assignment and deletion forms read the
    bounds as C longs before proxy_slice and proxy_ass_slice pass them to
    PySequence_GetSlice and its siblings on the referent. */
@@ -1101,6 +1136,10 @@ static tinypy_value_t *__tinypy_weakref_proxy_slice_method(tinypy_value_t *funct
     }
     tinypy_value_t *object = __tinypy_weakref_proxy_referent(TINYPY_TUPLE_GET(args, 0U), out_error);
     if (object == NULL) {
+        return NULL;
+    }
+    if (__tinypy_weakref_referent_sliceable(object, operation, out_error) == TINYPY_FALSE) {
+        TINYPY_DECREF(object);
         return NULL;
     }
     tinypy_value_t *start = tinypy_integer_from_i64(vm, offsets[0]);

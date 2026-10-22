@@ -33,7 +33,7 @@ static tinypy_value_t *__tinypy_functools_copy_keywords(tinypy_value_t *source, 
         return NULL;
     }
     TINYPY_INCREF(source);
-    tinypy_bool_t copied = tinypy_internal_dict_update_from(result, source, "NULL result without error in PyObject_Call", out_error);
+    tinypy_bool_t copied = tinypy_internal_dict_update_mapping(result, source, out_error);
 
     TINYPY_DECREF(source);
     if (copied == 0) {
@@ -99,7 +99,7 @@ tinypy_value_t *tinypy_internal_partial_call(tinypy_value_t *callable, tinypy_va
             TINYPY_DECREF(combined_args);
             return NULL;
         }
-        if (call_keyword_count != 0U && tinypy_internal_dict_update_from(combined_kwargs, kwargs, "NULL result without error in PyObject_Call", out_error) == 0) {
+        if (call_keyword_count != 0U && tinypy_internal_dict_update_mapping(combined_kwargs, kwargs, out_error) == 0) {
             TINYPY_DECREF(combined_kwargs);
             TINYPY_DECREF(combined_args);
             return NULL;

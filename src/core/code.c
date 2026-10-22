@@ -846,13 +846,15 @@ static tinypy_value_t *__tinypy_code_cmp_method(tinypy_value_t *function, tinypy
     int32_t order;
 
     (void)user_data;
-    if (__tinypy_code_method_arguments(vm, args, kwargs, 2U, out_error) == 0 || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 1U)) != TINYPY_VALUE_CODE) {
-        if (out_error == NULL || *out_error == NULL) {
-            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "code.__cmp__ requires two code objects", out_error);
-        }
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
-    if (__tinypy_code_order(TINYPY_TUPLE_GET(args, 0U), TINYPY_TUPLE_GET(args, 1U), &order, out_error) == 0) {
+    tinypy_value_t *left = TINYPY_TUPLE_GET(args, 0U);
+    tinypy_value_t *right = TINYPY_TUPLE_GET(args, 1U);
+    if (tinypy_internal_compare_cmp_argument(left, right, TINYPY_VALUE_KIND(right) == TINYPY_VALUE_CODE, out_error) == 0) {
+        return NULL;
+    }
+    if (__tinypy_code_order(left, right, &order, out_error) == 0) {
         return NULL;
     }
     tinypy_value_t *return_value_1 = tinypy_integer_from_i64(vm, order);

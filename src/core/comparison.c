@@ -652,7 +652,9 @@ static tinypy_bool_t __tinypy_comparison_three_way(tinypy_value_t *left, tinypy_
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_comparison_dict_order(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, tinypy_error_t **out_error) {
+/* dict_compare: the shorter dictionary orders first, and dictionaries of a
+   size by their smallest differing keys, then by the values of those keys. */
+tinypy_bool_t tinypy_internal_compare_dict_order(tinypy_value_t *left, tinypy_value_t *right, int32_t *out_order, tinypy_error_t **out_error) {
     size_t left_size = TINYPY_DICT_OBJECT(left)->used;
     size_t right_size = TINYPY_DICT_OBJECT(right)->used;
     tinypy_value_t *left_key = NULL;
@@ -699,6 +701,29 @@ fail:
     }
     TINYPY_DECREF(left_value);
     TINYPY_DECREF(left_key);
+    return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* wrap_cmpfunc calls the three-way slot of a built-in type only with an
+   operand whose type has the same slot, one of the family that does not
+   override __cmp__, or derives from the type of the receiver. */
+tinypy_bool_t tinypy_internal_compare_cmp_argument(tinypy_value_t *self, tinypy_value_t *other, tinypy_bool_t family, tinypy_error_t **out_error) {
+    if (family != 0 && __tinypy_internal_object_overrides_dispatch(other, TINYPY_INTERNAL_DISPATCH_BIT(CMP)) == 0) {
+        return TINYPY_TRUE;
+    }
+    if (tinypy_type_is_subtype(other->type, self->type) != 0) {
+        return TINYPY_TRUE;
+    }
+    tinypy_message_part_t parts[] = {
+        TINYPY_MESSAGE_PART_TYPE_NAME(self),
+        TINYPY_MESSAGE_PART_LITERAL(".__cmp__(x,y) requires y to be a '"),
+        TINYPY_MESSAGE_PART_TYPE_NAME(self),
+        TINYPY_MESSAGE_PART_LITERAL("', not a '"),
+        TINYPY_MESSAGE_PART_TYPE_NAME(other),
+        TINYPY_MESSAGE_PART_LITERAL("'"),
+    };
+
+    tinypy_internal_make_vm_error_parts(TINYPY_VALUE_VM(self), TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -839,7 +864,7 @@ static tinypy_bool_t __tinypy_comparison_order(tinypy_value_t *left, tinypy_valu
         return TINYPY_TRUE;
     }
     if (left_kind == TINYPY_VALUE_DICT && right_kind == TINYPY_VALUE_DICT) {
-        tinypy_bool_t return_value_1 = __tinypy_comparison_dict_order(left, right, out_order, out_error);
+        tinypy_bool_t return_value_1 = tinypy_internal_compare_dict_order(left, right, out_order, out_error);
         return return_value_1;
     }
     if (left_kind == TINYPY_VALUE_SLICE && right_kind == TINYPY_VALUE_SLICE) {
@@ -1956,7 +1981,7 @@ static tinypy_bool_t __tinypy_comparison_three_way_inner(tinypy_value_t *left, t
             }
         }
         else if (kind == TINYPY_VALUE_DICT) {
-            tinypy_bool_t result = __tinypy_comparison_dict_order(left, right, out_order, out_error);
+            tinypy_bool_t result = tinypy_internal_compare_dict_order(left, right, out_order, out_error);
             return result;
         }
         else if (kind == TINYPY_VALUE_BOOL || kind == TINYPY_VALUE_INTEGER || kind == TINYPY_VALUE_LONG || kind == TINYPY_VALUE_BUFFER || kind == TINYPY_VALUE_SLICE) {

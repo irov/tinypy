@@ -230,6 +230,63 @@ class FormatFields(unittest.TestCase):
         self.assertEqual(str(failure(lambda: format(Source(), None), TypeError)),
                          'format expects arg 2 to be string or unicode, not NoneType')
 
+    def test_builtin_format_converts_spec_subtype_like_its_format(self):
+        events = []
+        class String(str):
+            def __str__(self):
+                events.append('String.str')
+                return '<5'
+            def __unicode__(self):
+                events.append('String.unicode')
+                return u'^7'
+        class Unicode(unicode):
+            def __str__(self):
+                events.append('Unicode.str')
+                return '<5'
+            def __unicode__(self):
+                events.append('Unicode.unicode')
+                return u'^7'
+        class Source(object):
+            def __str__(self):
+                return 'os'
+        cases = [
+            ('ab', String('>3'), 'ab   ', ['String.str']),
+            ('ab', Unicode(u'>3'), u'ab   ', ['Unicode.str']),
+            ('ab', String(''), 'ab   ', ['String.str']),
+            (u'ab', String('>3'), u'  ab   ', ['String.unicode']),
+            (u'ab', Unicode(u'>3'), u'  ab   ', ['Unicode.unicode']),
+            (Source(), String('>3'), 'os   ', ['String.str']),
+            (Source(), Unicode(u'>3'), u'  os   ', ['Unicode.unicode']),
+            (42, String('>3'), ' 42', []),
+            (42, Unicode(u'>3'), u'42   ', ['Unicode.str']),
+            (2.5, Unicode(u''), u'2.5  ', ['Unicode.str']),
+        ]
+        for value, spec, expected, calls in cases:
+            del events[:]
+            result = format(value, spec)
+            self.assertEqual((type(result), result, events), (type(expected), expected, calls))
+        del events[:]
+        self.assertEqual(u'ab'.__format__(String('>3')), u'  ab   ')
+        self.assertEqual('ab'.__format__(String('>3')), 'ab   ')
+        self.assertEqual((42).__format__(String('>3')), ' 42')
+        self.assertEqual(events, ['String.unicode', 'String.str'])
+
+    def test_number_format_reads_unicode_spec_subtype_str_as_bytes(self):
+        class Code(unicode):
+            def __str__(self):
+                return '\xf0'
+        class Fill(unicode):
+            def __str__(self):
+                return '\xe9>4'
+        for value in (42, 42L, True, 2.5, 1j):
+            message = "Unknown format code '\xf0' for object of type '%s'" % type(value).__name__
+            self.assertEqual(str(failure(lambda: format(value, Code(u'>3')), ValueError)), message)
+            self.assertEqual(str(failure(lambda: type(value).__format__(value, Code(u'>3')), ValueError)), message)
+            formatted = type(value).__format__(value, Fill(u''))
+            self.assertIs(type(formatted), str)
+            error = failure(lambda: format(value, Fill(u'>3')), UnicodeDecodeError)
+            self.assertEqual((error.object, error.start, error.end), (formatted, 0, 1))
+
     def test_object_format_calls_converted_subtype_format(self):
         events = []
         class String(str):

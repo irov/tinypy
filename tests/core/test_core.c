@@ -5596,14 +5596,23 @@ static int32_t __test_native_embedding(void) {
     TEST_CHECK(value != NULL && tinypy_integer_as_i64(value) == 78);
     TEST_CHECK(error == NULL);
     tinypy_release(value);
+    tinypy_release(call_args);
+    /* The type publishes the slot wrapper of its call callback, which its
+       get_attribute callback, as tp_getattro, leaves to the type. */
     attribute_result = tinypy_object_get_attr(instance, "__call__", 8U, &error);
-    TEST_CHECK(attribute_result == instance);
-    TEST_CHECK(error == NULL);
+    TEST_CHECK(attribute_result == NULL && error != NULL);
+    tinypy_error_release(error);
+    error = NULL;
+    tinypy_vm_clear_error(vm);
+    attribute_result = tinypy_type_get_attr(native_type, "__call__", 8U);
+    value = tinypy_integer_from_i64(vm, 5);
+    tinypy_value_t *wrapper_items[2] = {instance, value};
+    call_args = tinypy_tuple_from_items(vm, wrapper_items, 2U);
+    tinypy_release(value);
     value = tinypy_call(attribute_result, call_args, NULL, &error);
     TEST_CHECK(value != NULL && tinypy_integer_as_i64(value) == 78);
     TEST_CHECK(error == NULL);
     tinypy_release(value);
-    tinypy_release(attribute_result);
     tinypy_release(call_args);
 
     value = tinypy_integer_from_i64(vm, 73);
@@ -9926,6 +9935,272 @@ static int32_t __test_native_slot_failures(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+typedef struct test_native_wrapper_state_t {
+    tinypy_vm_t *vm;
+    tinypy_value_t *log;
+    const char *tag;
+} test_native_wrapper_state_t;
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_wrapper_pair(test_native_wrapper_state_t *state, const char *operation, tinypy_value_t *value) {
+    tinypy_value_t *items[3] = {tinypy_string_from_bytes(state->vm, operation, strlen(operation)), tinypy_string_from_bytes(state->vm, state->tag, strlen(state->tag)), value};
+    tinypy_value_t *pair = tinypy_tuple_from_items(state->vm, items, 3U);
+
+    tinypy_release(items[1]);
+    tinypy_release(items[0]);
+    return pair;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_wrapper_get_attribute(tinypy_value_t *instance, void *payload, tinypy_value_t *name, void *user_data, tinypy_error_t **out_error) {
+    test_native_wrapper_state_t *state = (test_native_wrapper_state_t *)user_data;
+
+    (void)instance;
+    (void)payload;
+    (void)out_error;
+    if (__test_native_attribute_name_equal(name, "x", 1U) == 0) {
+        tinypy_vm_raise_error(state->vm, TINYPY_ERROR_ATTRIBUTE, "missing");
+        return NULL;
+    }
+    tinypy_value_t *pair = __test_native_wrapper_pair(state, "attribute", name);
+    return pair;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __test_native_wrapper_set_attribute(tinypy_value_t *instance, void *payload, tinypy_value_t *name, tinypy_value_t *value, void *user_data, tinypy_error_t **out_error) {
+    test_native_wrapper_state_t *state = (test_native_wrapper_state_t *)user_data;
+
+    (void)instance;
+    (void)payload;
+    (void)out_error;
+    tinypy_value_t *entry = __test_native_wrapper_pair(state, value != NULL ? "set" : "delete", name);
+    tinypy_list_append(state->log, entry);
+    tinypy_release(entry);
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_wrapper_get_item(tinypy_value_t *instance, void *payload, tinypy_value_t *key, void *user_data, tinypy_error_t **out_error) {
+    (void)instance;
+    (void)payload;
+    (void)out_error;
+    tinypy_value_t *pair = __test_native_wrapper_pair((test_native_wrapper_state_t *)user_data, "item", key);
+    return pair;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_wrapper_add(tinypy_value_t *instance, void *payload, tinypy_value_t *other, void *user_data, tinypy_error_t **out_error) {
+    (void)instance;
+    (void)payload;
+    (void)out_error;
+    tinypy_value_t *pair = __test_native_wrapper_pair((test_native_wrapper_state_t *)user_data, "add", other);
+    return pair;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_wrapper_call(tinypy_value_t *instance, void *payload, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    (void)instance;
+    (void)payload;
+    (void)kwargs;
+    (void)out_error;
+    tinypy_value_t *pair = __test_native_wrapper_pair((test_native_wrapper_state_t *)user_data, "call", args);
+    return pair;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_wrapper_repr(tinypy_value_t *instance, void *payload, void *user_data, tinypy_error_t **out_error) {
+    test_native_wrapper_state_t *state = (test_native_wrapper_state_t *)user_data;
+
+    (void)instance;
+    (void)payload;
+    (void)out_error;
+    tinypy_value_t *text = tinypy_string_from_bytes(state->vm, state->tag, strlen(state->tag));
+    return text;
+}
+//////////////////////////////////////////////////////////////////////////
+static ptrdiff_t __test_native_wrapper_length(tinypy_value_t *instance, void *payload, void *user_data, tinypy_error_t **out_error) {
+    (void)instance;
+    (void)payload;
+    (void)user_data;
+    (void)out_error;
+    return 7;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_native_wrapper_contains(tinypy_value_t *instance, void *payload, tinypy_value_t *item, void *user_data, tinypy_error_t **out_error) {
+    (void)instance;
+    (void)payload;
+    (void)item;
+    (void)user_data;
+    (void)out_error;
+    return 1;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__test_native_wrapper_kept(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    (void)function;
+    (void)args;
+    (void)kwargs;
+    (void)out_error;
+    tinypy_value_t *kept = (tinypy_value_t *)user_data;
+    tinypy_retain(kept);
+    return kept;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A host native type publishes a slot wrapper for each callback of its
+   spec, as add_operators does, which a Python subclass delegates to and
+   which a namespace name or a spec update keeps in step, while instances
+   keep dispatching their slots: a host native subtype stays with its own
+   spec and a mapping callback does not make a type iterable. set_attribute
+   is the tp_setattro of the type, which assignments of descriptors and
+   deletions reach, and an instance without item callbacks reports the
+   messages of a heap type. */
+static int32_t __test_native_slot_wrappers(void) {
+    static const char source[] =
+        "def wrappers(type_value):\n"
+        "    return sorted(name for name in type_value.__dict__ if name.startswith('__') and name not in ('__dict__', '__doc__', '__module__', '__weakref__'))\n"
+        "class Sub(Native):\n"
+        "    def __getattribute__(self, name): return super(Sub, self).__getattribute__(name)\n"
+        "    def __setattr__(self, name, value): super(Sub, self).__setattr__(name, value)\n"
+        "    def __delattr__(self, name): super(Sub, self).__delattr__(name)\n"
+        "    def __repr__(self): return 'Sub+' + super(Sub, self).__repr__()\n"
+        "    def __call__(self, *args): return super(Sub, self).__call__(*args)\n"
+        "    def __getitem__(self, key): return super(Sub, self).__getitem__(key)\n"
+        "    def __len__(self): return super(Sub, self).__len__()\n"
+        "    def __add__(self, other): return super(Sub, self).__add__(other)\n"
+        "    def __contains__(self, item): return super(Sub, self).__contains__(item)\n"
+        "sub = Sub()\n"
+        "native = Native()\n"
+        "check(wrappers(Native), ['__add__', '__call__', '__contains__', '__delattr__', '__getattribute__', '__getitem__', '__len__', '__radd__', '__repr__', '__setattr__'])\n"
+        "check((sub.x, repr(sub), sub(1), sub[3], len(sub), sub + 1, 1 in sub), (('attribute', 'native', 'x'), 'Sub+native', ('call', 'native', (1,)), ('item', 'native', 3), 7, ('add', 'native', 1), True))\n"
+        "check((Native.__getattribute__(sub, u'x'), Native.__radd__(native, 2), Native.__getitem__(native, 'k')), (('attribute', 'native', 'x'), ('add', 'native', 2), ('item', 'native', 'k')))\n"
+        "expect_error(AttributeError, lambda: Native.__getattribute__(native, 'y'), 'missing')\n"
+        "expect_error(TypeError, lambda: Native.__getattribute__(native, 1), \"attribute name must be string, not 'int'\")\n"
+        "expect_error(TypeError, lambda: Native.__getitem__(native), 'expected 1 arguments, got 0')\n"
+        "expect_error(TypeError, lambda: Native.__setattr__(native, 'y'), ' expected 2 arguments, got 1')\n"
+        "expect_error(TypeError, lambda: Native.__len__(native, k=1), \"wrapper __len__ doesn't take keyword arguments\")\n"
+        "expect_error(TypeError, lambda: Native.__len__(1), \"descriptor '__len__' requires a 'Native' object but received a 'int'\")\n"
+        "class Plain(object):\n"
+        "    pass\n"
+        "Native.p = property(lambda self: 1, lambda self, value: None)\n"
+        "native.y = 1\n"
+        "del native.y\n"
+        "delattr(native, 'z')\n"
+        "native.__class__ = Plain\n"
+        "native.p = 2\n"
+        "sub.w = 3\n"
+        "del sub.w\n"
+        "check(log, [('set', 'native', 'y'), ('delete', 'native', 'y'), ('delete', 'native', 'z'), ('set', 'native', '__class__'), ('set', 'native', 'p'), ('set', 'native', 'w'), ('delete', 'native', 'w')])\n"
+        "expect_error(AttributeError, lambda: object.__setattr__(native, 'v', 1), \"'Native' object has no attribute 'v'\")\n"
+        "lookup = Lookup()\n"
+        "check(wrappers(Lookup), ['__getitem__', '__len__'])\n"
+        "check((lookup[1], Lookup.__len__(lookup)), (('item', 'lookup', 1), 'kept'))\n"
+        "expect_error(TypeError, lambda: list(lookup), \"'Lookup' object is not iterable\")\n"
+        "expect_error(TypeError, lambda: reversed(lookup), 'argument to reversed() must be a sequence')\n"
+        "derived = Derived()\n"
+        "check(wrappers(Derived), [])\n"
+        "check((Native.__getitem__(derived, 2), super(Derived, derived).__getitem__(3)), (('item', 'native', 2), ('item', 'native', 3)))\n"
+        "check(repr(derived).startswith('<Derived object at 0x'), True)\n"
+        "expect_error(TypeError, lambda: derived[0], \"'Derived' object does not support indexing\")\n"
+        "expect_error(TypeError, lambda: derived['key'], \"'Derived' object has no attribute '__getitem__'\")\n"
+        "def assign(): derived[0] = 1\n"
+        "def delete(): del derived[0]\n"
+        "expect_error(TypeError, assign, \"'Derived' object does not support item assignment\")\n"
+        "expect_error(TypeError, delete, \"'Derived' object doesn't support item deletion\")\n"
+        "expect_error(TypeError, lambda: derived(), \"'Derived' object is not callable\")\n"
+        "added = super(Sub, sub).__radd__\n";
+    static const char update_source[] =
+        "check(wrappers(Native), ['__add__', '__call__', '__contains__', '__delattr__', '__getattribute__', '__getitem__', '__iadd__', '__len__', '__repr__', '__setattr__'])\n"
+        "check((Native.__iadd__(native, 4), Native.__getitem__(native, 'key')), (('add', 'native', 4), ('item', 'native', 'key')))\n"
+        "check(added(5), NotImplemented)\n"
+        "check(Lookup.__dict__['__getitem__'], None)\n";
+    test_allocator_state_t allocator_state;
+    test_native_wrapper_state_t native_state;
+    test_native_wrapper_state_t lookup_state;
+    tinypy_native_type_spec_t spec;
+    tinypy_native_type_spec_t lookup_spec;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&allocator_state, 0, sizeof(allocator_state));
+    tinypy_allocator_t allocator = __test_make_allocator(&allocator_state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *name_key = tinypy_string_from_bytes(vm, "__name__", 8U);
+    tinypy_value_t *module_name = tinypy_string_from_bytes(vm, "contract", 8U);
+    tinypy_dict_set(globals, name_key, module_name);
+    tinypy_release(module_name);
+    tinypy_release(name_key);
+    tinypy_value_t *log = tinypy_list_from_items(vm, NULL, 0U);
+    tinypy_value_t *log_key = tinypy_string_from_bytes(vm, "log", 3U);
+    tinypy_dict_set(globals, log_key, log);
+    tinypy_release(log_key);
+    native_state.vm = vm;
+    native_state.log = log;
+    native_state.tag = "native";
+    lookup_state = native_state;
+    lookup_state.tag = "lookup";
+
+    tinypy_native_type_spec_init(&spec);
+    spec.has_instance_dict = TINYPY_FALSE;
+    spec.user_data = &native_state;
+    spec.get_attribute = __test_native_wrapper_get_attribute;
+    spec.set_attribute = __test_native_wrapper_set_attribute;
+    spec.repr = __test_native_wrapper_repr;
+    spec.call = __test_native_wrapper_call;
+    spec.mapping_get = __test_native_wrapper_get_item;
+    spec.mapping_length = __test_native_wrapper_length;
+    spec.add = __test_native_wrapper_add;
+    spec.reflected_add = __test_native_wrapper_add;
+    spec.contains = __test_native_wrapper_contains;
+    tinypy_type_t *native = tinypy_native_type_new(vm, "Native", 6U, NULL, 0U, NULL, &spec, &error);
+    TEST_CHECK(native != NULL && error == NULL);
+    tinypy_native_type_spec_t derived_spec;
+    tinypy_native_type_spec_init(&derived_spec);
+    derived_spec.has_instance_dict = TINYPY_FALSE;
+    const tinypy_type_t *derived_bases[1] = {native};
+    tinypy_type_t *derived = tinypy_native_type_new(vm, "Derived", 7U, derived_bases, 1U, NULL, &derived_spec, &error);
+    TEST_CHECK(derived != NULL && error == NULL);
+    /* A name the namespace defines keeps its value. */
+    tinypy_value_t *namespace_dict = tinypy_dict_new(vm);
+    tinypy_value_t *kept = tinypy_string_from_bytes(vm, "kept", 4U);
+    tinypy_value_t *keeper = tinypy_native_function_new(vm, "__len__", 7U, __test_native_wrapper_kept, kept, NULL);
+    tinypy_value_t *length_key = tinypy_string_from_bytes(vm, "__len__", 7U);
+    tinypy_dict_set(namespace_dict, length_key, keeper);
+    tinypy_release(length_key);
+    tinypy_release(keeper);
+    tinypy_native_type_spec_init(&lookup_spec);
+    lookup_spec.user_data = &lookup_state;
+    lookup_spec.mapping_get = __test_native_wrapper_get_item;
+    lookup_spec.mapping_length = __test_native_wrapper_length;
+    tinypy_type_t *lookup = tinypy_native_type_new(vm, "Lookup", 6U, NULL, 0U, namespace_dict, &lookup_spec, &error);
+    TEST_CHECK(lookup != NULL && error == NULL);
+    tinypy_release(namespace_dict);
+    __test_native_contract_add_type(globals, "Native", native);
+    __test_native_contract_add_type(globals, "Derived", derived);
+    __test_native_contract_add_type(globals, "Lookup", lookup);
+    TEST_CHECK(__test_native_contract_run(vm, globals, source) == 0);
+
+    /* An update publishes the wrappers of the callbacks it adds and withdraws
+       those of the callbacks it removes, never replacing another value; a
+       bound wrapper of a removed number callback returns NotImplemented. */
+    spec.reflected_add = NULL;
+    spec.inplace_add = __test_native_wrapper_add;
+    TEST_CHECK(tinypy_native_type_update_spec(native, &spec, &error) != 0 && error == NULL);
+    tinypy_value_t *none = tinypy_none_get(vm);
+    tinypy_type_set_attr(lookup, "__getitem__", 11U, none);
+    tinypy_release(none);
+    TEST_CHECK(tinypy_native_type_update_spec(lookup, &lookup_spec, &error) != 0 && error == NULL);
+    TEST_CHECK(__test_native_contract_run(vm, globals, update_source) == 0);
+
+    tinypy_release(kept);
+    tinypy_release(log);
+    tinypy_type_t *releases[] = {lookup, derived, native};
+    for (size_t index = 0U; index < sizeof(releases) / sizeof(releases[0]); ++index) {
+        tinypy_value_t *type_value = tinypy_type_as_value(releases[index]);
+
+        tinypy_release(type_value);
+    }
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U);
+    TEST_CHECK(allocator_state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 /* A type change withdraws the versions of the type and of its subclasses.
    The builtin types derived from a builtin type are no registered
    subclasses and follow it all the same, and once the versions run out the
@@ -11209,6 +11484,10 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "native_slot_failures") == 0) {
         int result = __test_native_slot_failures();
+        return result;
+    }
+    if (strcmp(argv[1], "native_slot_wrappers") == 0) {
+        int result = __test_native_slot_wrappers();
         return result;
     }
     if (strcmp(argv[1], "type_versions") == 0) {

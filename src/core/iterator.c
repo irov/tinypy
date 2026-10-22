@@ -1258,9 +1258,11 @@ static tinypy_value_t *__tinypy_reversed_new(tinypy_type_t *type, tinypy_value_t
 
     /* PySequence_Check excludes dictionaries outright and otherwise demands an
        item protocol, so mappings never reach the index-counting path; the
-       sq_item of a native type with sequence_get is one. */
+       sq_item of a native type with sequence_get is one, whereas a weak proxy
+       and a dictproxy subscript like mappings alone. */
+    tinypy_bool_t mapping = TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_DICT || sequence->type == vm->dictproxy_type || __tinypy_internal_weakref_is_proxy(sequence) != TINYPY_FALSE ? TINYPY_TRUE : TINYPY_FALSE;
     tinypy_bool_t item_slot = sequence->type->sequence_slots != NULL && sequence->type->sequence_slots->get_item != NULL ? TINYPY_TRUE : TINYPY_FALSE;
-    if (TINYPY_VALUE_KIND(sequence) == TINYPY_VALUE_DICT || (TINYPY_VALUE_KIND(sequence) != TINYPY_VALUE_OLD_INSTANCE && item_slot == 0 && tinypy_internal_object_has_special_key(sequence, vm->internal_special_getitem_key) == 0)) {
+    if (mapping != 0 || (TINYPY_VALUE_KIND(sequence) != TINYPY_VALUE_OLD_INSTANCE && item_slot == 0 && tinypy_internal_object_has_special_key(sequence, vm->internal_special_getitem_key) == 0)) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "argument to reversed() must be a sequence", out_error);
         return NULL;
     }

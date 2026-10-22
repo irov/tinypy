@@ -229,8 +229,6 @@ static tinypy_value_t *__tinypy_numeric_getnewargs_method(tinypy_value_t *functi
 static tinypy_value_t *__tinypy_numeric_cmp_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_type_e expected = (tinypy_value_type_e)(intptr_t)user_data;
-    int32_t equal;
-    int32_t less;
 
     if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
@@ -244,38 +242,14 @@ static tinypy_value_t *__tinypy_numeric_cmp_method(tinypy_value_t *function, tin
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "numeric comparison descriptor received an incompatible object", out_error);
         return NULL;
     }
-    if (right_valid == 0) {
-        /* wrap_cmpfunc names the receiver's own type twice. */
-        tinypy_message_part_t parts[] = {
-            TINYPY_MESSAGE_PART_TYPE_NAME(left),
-            TINYPY_MESSAGE_PART_LITERAL(".__cmp__(x,y) requires y to be a '"),
-            TINYPY_MESSAGE_PART_TYPE_NAME(left),
-            TINYPY_MESSAGE_PART_LITERAL("', not a '"),
-            TINYPY_MESSAGE_PART_TYPE_NAME(right),
-            TINYPY_MESSAGE_PART_LITERAL("'"),
-        };
-
-        tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
+    if (tinypy_internal_compare_cmp_argument(left, right, right_valid, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *comparison = tinypy_internal_compare_builtin_value(left, right, TINYPY_COMPARE_EQUAL, out_error);
-    if (comparison == NULL) {
-        return NULL;
-    }
-    equal = tinypy_bool_as_i32(comparison);
-    TINYPY_DECREF(comparison);
-    if (equal != 0) {
-        tinypy_value_t *result = tinypy_integer_from_i64(vm, INT64_C(0));
-
-        return result;
-    }
-    comparison = tinypy_internal_compare_builtin_value(left, right, TINYPY_COMPARE_LESS, out_error);
-    if (comparison == NULL) {
-        return NULL;
-    }
-    less = tinypy_bool_as_i32(comparison);
-    TINYPY_DECREF(comparison);
-    tinypy_value_t *result = tinypy_integer_from_i64(vm, less != 0 ? INT64_C(-1) : INT64_C(1));
+    /* int_compare and long_compare order the values themselves, whatever
+       comparisons their types define. */
+    int32_t order = 0;
+    (void)tinypy_internal_numeric_order(left, right, &order);
+    tinypy_value_t *result = tinypy_integer_from_i64(vm, order);
 
     return result;
 }

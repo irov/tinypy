@@ -1537,6 +1537,34 @@ class EvaluationSemantics(unittest.TestCase):
         self.assertRaises(RuntimeError, list, BadLength(iter([1])))
         self.assertRaises(RuntimeError, map, None, BadLength(iter([1])))
 
+    def test_map_pending_length_error_is_replaced_by_later_exceptions(self):
+        class BadLength(object):
+            def __init__(self, items, error=RuntimeError):
+                self.items = items
+                self.error = error
+            def __iter__(self):
+                return iter(self.items)
+            def __len__(self):
+                raise self.error('length')
+        class StopSubclass(StopIteration):
+            pass
+        def handled(item):
+            try:
+                {}[item]
+            except KeyError:
+                return item
+        self.assertEqual(map(lambda item: getattr(item, 'missing', item), BadLength([1, 2])), [1, 2])
+        self.assertEqual(map(lambda item: hasattr(item, 'missing'), BadLength([1, 2])), [False, False])
+        self.assertEqual(map(handled, BadLength([1, 2])), [1, 2])
+        self.assertEqual(map(lambda item: dict([(item, 0)]), BadLength([1])), [{1: 0}])
+        self.assertEqual(map(lambda first, second: hasattr(first, 'missing'), BadLength([1], KeyError), BadLength([2], ValueError)), [False])
+        self.assertEqual(map(lambda item: item, BadLength([1, 2], StopIteration)), [1, 2])
+        self.assertEqual(map(lambda item: item, BadLength([1], StopSubclass)), [1])
+        self.assertEqual(map(None, BadLength([1, 2], StopIteration), [3]), [(1, 3), (2, None)])
+        self.assertEqual(map(None, [3], BadLength([1, 2], StopIteration)), [(3, 1), (None, 2)])
+        self.assertRaises(RuntimeError, map, lambda item: getattr(item, 'real', item), BadLength([1, 2]))
+        self.assertRaises(RuntimeError, map, lambda item: hasattr(item, 'real'), BadLength([1, 2]))
+
     def test_range_long_operands_keep_their_own_protocols(self):
         events = []
         class BadZero(int):

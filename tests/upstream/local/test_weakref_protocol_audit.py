@@ -727,6 +727,52 @@ class WeakrefProtocolAudit(unittest.TestCase):
             weakref.ref.__new__()
         self.assertEqual(error.exception.args, ('weakref.__new__(): not enough arguments',))
 
+    def test_reversed_refuses_proxies_and_dictproxy(self):
+        class Items(list):
+            pass
+        class Reversible(object):
+            def __reversed__(self):
+                return iter('rev')
+        class Indexed(object):
+            def __getitem__(self, index):
+                return index
+            def __len__(self):
+                return 2
+        keep = [Items([1, 2]), Reversible(), Indexed()]
+        for target in keep + [type.__dict__['__dict__'].__get__(Indexed)]:
+            argument = weakref.proxy(target) if target in keep else target
+            with self.assertRaises(TypeError) as caught:
+                reversed(argument)
+            self.assertEqual(str(caught.exception), 'argument to reversed() must be a sequence')
+        self.assertEqual((list(reversed(keep[0])), list(reversed(keep[2]))), ([2, 1], [1, 0]))
+
+    def test_proxy_slices_report_an_unsliceable_referent(self):
+        class Plain(object):
+            pass
+        class Setter(object):
+            def __setitem__(self, key, value):
+                pass
+        plain = Plain()
+        proxy = weakref.proxy(plain)
+        setter = Setter()
+        setter_proxy = weakref.proxy(setter)
+        def get():
+            return proxy[1:2]
+        def store():
+            proxy[1:2] = [1]
+        def remove():
+            del proxy[1:2]
+        def remove_setter():
+            del setter_proxy[1:2]
+        failures = ((get, TypeError, "'Plain' object is unsliceable"), (store, TypeError, "'Plain' object doesn't support slice assignment"),
+                    (remove, TypeError, "'Plain' object doesn't support slice assignment"), (remove_setter, AttributeError, '__delitem__'),
+                    (lambda: proxy.__setitem__(slice(1, 2), [1]), AttributeError, "'Plain' object has no attribute '__setitem__'"))
+        for function, exception, message in failures:
+            with self.assertRaises(exception) as caught:
+                function()
+            self.assertEqual(str(caught.exception), message)
+        setter_proxy[1:2] = [1]
+
     def test_remove_dead_weakref_suppresses_lookup_keyerror(self):
         class Missing(KeyError):
             pass

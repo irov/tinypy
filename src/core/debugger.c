@@ -41,17 +41,23 @@ static tinypy_bool_t __tinypy_debugger_frame_name_equal(tinypy_value_t *value, c
 static tinypy_value_t **__tinypy_debugger_frame_slot(tinypy_frame_object_t *frame, const char *name, size_t name_size, tinypy_value_t **out_cell) {
     tinypy_code_object_t *code = TINYPY_CODE_OBJECT(frame->code);
     size_t local_count = (size_t)code->local_count;
-    size_t cell_count = TINYPY_TUPLE_SIZE(code->cellvars);
-    size_t free_count = (code->flags & TINYPY_CODE_OPTIMIZED) != 0 ? TINYPY_TUPLE_SIZE(code->freevars) : 0U;
     tinypy_value_t **slot = NULL;
     size_t index;
 
     *out_cell = NULL;
-    for (index = 0U; index < local_count && slot == NULL; ++index) {
+    for (index = 0U; index < local_count; ++index) {
         if (__tinypy_debugger_frame_name_equal(TINYPY_TUPLE_GET(code->varnames, index), name, name_size) != 0) {
             slot = &frame->locals_plus[index];
+            break;
         }
     }
+    /* Only an argument shares its name with a cell. */
+    size_t argument_count = (size_t)code->arg_count + ((code->flags & TINYPY_CODE_VARARGS) != 0 ? 1U : 0U) + ((code->flags & TINYPY_CODE_VAR_KEYWORDS) != 0 ? 1U : 0U);
+    if (slot != NULL && index >= argument_count) {
+        return slot;
+    }
+    size_t cell_count = TINYPY_TUPLE_SIZE(code->cellvars);
+    size_t free_count = (code->flags & TINYPY_CODE_OPTIMIZED) != 0 ? TINYPY_TUPLE_SIZE(code->freevars) : 0U;
     for (index = 0U; index < cell_count + free_count; ++index) {
         tinypy_value_t *cell_name = index < cell_count ? TINYPY_TUPLE_GET(code->cellvars, index) : TINYPY_TUPLE_GET(code->freevars, index - cell_count);
 

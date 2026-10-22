@@ -52,6 +52,22 @@ typedef tinypy_value_t *(*tinypy_native_compare_t)(tinypy_value_t *instance, voi
  * and with sequence_length reversible, as sq_item does in CPython; like
  * PySequence_GetItem, the iteration calls it without out_error and reads a
  * failure from the VM error.
+ * get_attribute and set_attribute are the tp_getattro and tp_setattro of
+ * the type: get_attribute answers the lookups, __class__ included, and
+ * set_attribute receives every assignment, ahead of any descriptor of the
+ * type, and every deletion with a NULL value, as mapping_set receives the
+ * deletion of an item; object.__setattr__ and object.__delattr__ stay
+ * generic.
+ * As add_operators names the slots of a C type, the type publishes a slot
+ * wrapper for each callback of its spec under the name of its special
+ * method, __setattr__ and __delattr__ for set_attribute, __lt__ to __ge__
+ * for compare and __radd__ or __iadd__ for the reflected and in-place
+ * callbacks; a mapping callback takes a name it shares with a sequence one.
+ * A name its namespace defines keeps its value, and tinypy_type_set_attr
+ * replaces a wrapper. A wrapper runs the callback of the spec of the type
+ * that publishes it, so that a Python subclass delegates through super() or
+ * the type, while the operations on an instance keep dispatching the slots
+ * of its own type.
  * payload_alignment accepts any power of two up to alignof(max_align_t). */
 struct tinypy_native_type_spec_t {
     uint32_t abi_version;
@@ -125,7 +141,9 @@ tinypy_type_t *tinypy_native_type_new(tinypy_vm_t *vm, const char *name, size_t 
 /* Borrows and retains an existing byte-string name from the type VM. */
 tinypy_type_t *tinypy_native_type_new_key(tinypy_value_t *name, const tinypy_type_t *const *bases, size_t base_count, tinypy_value_t *namespace_dict, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error);
 /* Replaces the dispatch callbacks; a callback the new spec leaves NULL resets
- * its slot. The Python subclasses created earlier keep the callbacks they
+ * its slot. The slot wrappers follow, those of the removed callbacks are
+ * withdrawn, and no other value of the namespace of the type is replaced.
+ * The Python subclasses created earlier keep the callbacks they
  * copied from the type, and host native subtypes keep their own spec. A call
  * that was already dispatching to a removed callback raises TypeError, or
  * returns NotImplemented from a number or comparison slot. */

@@ -934,7 +934,7 @@ void tinypy_internal_initialize_struct_module(tinypy_vm_t *vm) {
     spec.payload_size = sizeof(tinypy_struct_payload_t);
     spec.has_instance_dict = TINYPY_FALSE;
     spec.has_weakrefs = TINYPY_TRUE;
-    tinypy_type_t *struct_type = tinypy_native_type_new_key(vm->internal_struct_key, NULL, 0U, NULL, &spec, NULL);
+    tinypy_type_t *struct_type = tinypy_internal_native_type_new_key(vm->internal_struct_key, NULL, 0U, NULL, &spec, NULL);
     tinypy_value_t *type_doc = tinypy_string_from_bytes(vm, "Compiled struct object", 22U);
 
     struct_type->flags |= TINYPY_TYPE_FLAG_IMMUTABLE;

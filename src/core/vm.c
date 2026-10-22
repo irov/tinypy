@@ -1317,7 +1317,7 @@ static tinypy_type_t *__tinypy_internal_struct_sequence_type_new(tinypy_vm_t *vm
     spec.reflected_multiply = __tinypy_internal_struct_sequence_reflected_multiply;
     spec.has_instance_dict = TINYPY_FALSE;
     spec.has_weakrefs = TINYPY_FALSE;
-    tinypy_type_t *type = tinypy_native_type_new_key(name, NULL, 0U, NULL, &spec, NULL);
+    tinypy_type_t *type = tinypy_internal_native_type_new_key(name, NULL, 0U, NULL, &spec, NULL);
     type->release_references = __tinypy_internal_struct_sequence_release_references;
     type->traverse_references = __tinypy_internal_struct_sequence_traverse_references;
     type->flags = (type->flags | TINYPY_TYPE_FLAG_IMMUTABLE) & ~TINYPY_TYPE_FLAG_BASE_TYPE;
@@ -1684,7 +1684,7 @@ static void __tinypy_internal_initialize_generic_attribute_methods(tinypy_vm_t *
         TINYPY_VALUE_CELL, TINYPY_VALUE_CODE, TINYPY_VALUE_FRAME, TINYPY_VALUE_CLASS, TINYPY_VALUE_OLD_INSTANCE,
         TINYPY_VALUE_NATIVE_FUNCTION, TINYPY_VALUE_XRANGE, TINYPY_VALUE_ITERATOR, TINYPY_VALUE_REVERSED, TINYPY_VALUE_ENUMERATE,
         TINYPY_VALUE_BUFFER, TINYPY_VALUE_BYTEARRAY, TINYPY_VALUE_PROPERTY, TINYPY_VALUE_STATIC_METHOD, TINYPY_VALUE_CLASS_METHOD,
-        TINYPY_VALUE_SUPER, TINYPY_VALUE_MODULE, TINYPY_VALUE_METHOD, TINYPY_VALUE_GETSET_DESCRIPTOR, TINYPY_VALUE_MEMBER_DESCRIPTOR,
+        TINYPY_VALUE_MODULE, TINYPY_VALUE_METHOD, TINYPY_VALUE_GETSET_DESCRIPTOR, TINYPY_VALUE_MEMBER_DESCRIPTOR,
         TINYPY_VALUE_DICT_KEYS, TINYPY_VALUE_DICT_VALUES, TINYPY_VALUE_DICT_ITEMS, TINYPY_VALUE_PARTIAL, TINYPY_VALUE_OUTPUT_STREAM,
     };
     tinypy_type_t *const descriptor_types[] = {vm->native_method_descriptor_type, vm->native_wrapper_descriptor_type, vm->native_method_wrapper_type, vm->native_class_method_descriptor_type};

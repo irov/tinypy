@@ -212,3 +212,36 @@ for ascii_operation in (
     assert ascii_decode_error(ascii_operation) == expected_decode_error, ascii_operation
 
 assert ascii_decode_error(lambda: format(0x80, u"c"))[1] == "\x80"
+
+
+# compile() passes an invalid UTF-8 run of a unicode literal to the handler
+# registered for strict and decodes each character of the replacement, then
+# the rest of the literal, however much longer than the literal the
+# replacement is. CPython 2.7 writes the escapes of such a replacement past
+# the buffer it sizes by the literal.
+strict_handler = _codecs.lookup_error("strict")
+literal_errors = []
+literal_replacements = []
+
+
+def literal_replacement(error):
+    literal_errors.append((error.reason, error.start, error.end, error.object))
+    return (literal_replacements.pop(0), error.end)
+
+
+_codecs.register_error("strict", literal_replacement)
+try:
+    for literal, replacements, expected, expected_errors in (
+        ("u'\xff" + "A" * 1100 + "'", [u"X" * 4405], u"X" * 4405 + u"A" * 1100, [("invalid start byte", 0, 1, "\xff")]),
+        ("u'\xc0'", [u"ABCDEFGH"], u"ABCDEFGH", [("invalid start byte", 0, 1, "\xc0")]),
+        ("ur'\\\xff" + "A" * 1100 + "'", [u"\U0001f600" * 1200], u"\\" + u"\U0001f600" * 1200 + u"A" * 1100, [("invalid start byte", 0, 1, "\xff")]),
+        ("u'" + "\xff" * 1500 + "'", [u"Z" * 20] * 1500, u"Z" * 30000, [("invalid start byte", index, index + 1, "\xff" * 1500) for index in range(1500)]),
+    ):
+        del literal_errors[:]
+        literal_replacements[:] = replacements
+        namespace = {}
+        exec compile("# coding: utf-8\nvalue = " + literal + "\n", "<literal>", "exec") in namespace
+        assert namespace["value"] == expected, literal[:8]
+        assert literal_errors == expected_errors, literal[:8]
+finally:
+    _codecs.register_error("strict", strict_handler)

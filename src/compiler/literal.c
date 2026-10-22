@@ -231,13 +231,11 @@ static TINYPY_NOINLINE uint8_t *__tinypy_compiler_unicode_escape_run(tinypy_comp
 }
 //////////////////////////////////////////////////////////////////////////
 /* Prepare the byte domain consumed by the Python 2 Unicode escape decoder.
-   The Latin-1 bytes Python tokenized, without a cookie or with one whose
-   normal name is Latin-1, occupy one byte each; every other character, one
-   a Latin-1 codec of the registry decoded included, occupies ten escape
-   bytes. Like decode_unicode, a backslash takes the next character along:
-   an ASCII one unchanged, a UTF-8 one as the escape of the backslash
-   itself. */
-static const uint8_t *__tinypy_compiler_unicode_escape_source(tinypy_compile_ctx_t *ctx, const uint8_t *source, size_t size, size_t *out_size, int32_t line_number, int32_t column_offset) {
+   The Latin-1 bytes Python tokenized occupy one byte each; every other
+   character occupies ten escape bytes. Like decode_unicode, a backslash
+   takes the next character along: an ASCII one unchanged, a UTF-8 one as
+   the escape of the backslash itself. */
+static const uint8_t *__tinypy_compiler_unicode_escape_source(tinypy_compile_ctx_t *ctx, const uint8_t *source, size_t size, tinypy_bool_t latin1, size_t *out_size, int32_t line_number, int32_t column_offset) {
     size_t first_non_ascii = 0U;
     while (first_non_ascii < size && source[first_non_ascii] < 0x80U) {
         first_non_ascii += 1U;
@@ -246,14 +244,13 @@ static const uint8_t *__tinypy_compiler_unicode_escape_source(tinypy_compile_ctx
         *out_size = size;
         return source;
     }
-    tinypy_bool_t latin1 = ctx->source_is_latin1 != 0 && ctx->source_diagnostic_transcoded == 0 ? TINYPY_TRUE : TINYPY_FALSE;
     size_t expansion = latin1 != 0 ? 1U : 6U;
     if (size > (SIZE_MAX - 1U) / expansion) {
         __tinypy_compiler_literal_error(ctx, "string literal exceeds compiler arena limit", line_number, column_offset);
         return NULL;
     }
     size_t capacity = size * expansion + 1U;
-    uint8_t *prepared = (uint8_t *)tinypy_internal_compiler_arena_allocate(ctx, capacity);
+    uint8_t *prepared = (uint8_t *)tinypy_internal_compiler_arena_allocate_uninitialized(ctx, capacity);
     size_t offset = 0U;
     size_t output_size = 0U;
 
@@ -616,25 +613,35 @@ static tinypy_value_t *__tinypy_compiler_parse_string(tinypy_compile_ctx_t *ctx,
         return NULL;
     }
     content_end = size - quote_size;
-    size_t original_content_size = content_end - position;
+    /* Python tokenizes the Latin-1 bytes of a source without a cookie or
+       with one whose normal name is Latin-1, not the text a Latin-1 codec
+       of the registry decodes. */
+    tinypy_bool_t latin1 = unicode != 0 && ctx->source_is_latin1 != 0 && ctx->source_diagnostic_transcoded == 0 ? TINYPY_TRUE : TINYPY_FALSE;
     if (unicode != 0) {
-        source = __tinypy_compiler_unicode_escape_source(ctx, source + position, content_end - position, &content_end, line_number, column_offset);
+        source = __tinypy_compiler_unicode_escape_source(ctx, source + position, content_end - position, latin1, &content_end, line_number, column_offset);
         if (source == NULL) {
             return NULL;
         }
         position = 0U;
     }
     else if (ctx->source_literals_ascii != 0) {
-        if (__tinypy_compiler_ascii_literal(ctx, source + position, original_content_size, raw, line_number) == 0) {
+        if (__tinypy_compiler_ascii_literal(ctx, source + position, content_end - position, raw, line_number) == 0) {
             return NULL;
         }
     }
-    if (original_content_size > (SIZE_MAX - 1U) / 4U) {
+    /* The content decodes to at most one byte for each of its bytes, two
+       for a Latin-1 byte of a unicode literal, escapes included, those
+       prepared for the characters and replacements of a unicode literal
+       too. The strict handler reserves room for a replacement it gives an
+       escape. */
+    size_t content_size = content_end - position;
+    size_t width = latin1 != 0 ? 2U : 1U;
+    if (content_size > (SIZE_MAX - 1U) / width) {
         __tinypy_compiler_literal_error(ctx, "string literal exceeds compiler arena limit", line_number, column_offset);
         return NULL;
     }
-    capacity = original_content_size * 4U + 1U;
-    output = (uint8_t *)tinypy_internal_compiler_arena_allocate(ctx, capacity);
+    capacity = content_size * width + 1U;
+    output = (uint8_t *)tinypy_internal_compiler_arena_allocate_uninitialized(ctx, capacity);
     if (output == NULL) {
         __tinypy_compiler_literal_error(ctx, "string literal exceeds compiler arena limit", line_number, column_offset);
         return NULL;

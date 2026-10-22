@@ -519,6 +519,13 @@ static tinypy_bool_t __tinypy_operator_long_multiply_words(tinypy_vm_t *vm, uint
         return TINYPY_TRUE;
     }
     if (minimum_count < (square != 0 ? TINYPY_LONG_KARATSUBA_SQUARE_CUTOFF : TINYPY_LONG_KARATSUBA_CUTOFF)) {
+        /* Below the cutoffs the smaller factor has few words: the product
+           polls once for all its word steps. */
+        size_t steps = maximum_count > SIZE_MAX / TINYPY_LONG_KARATSUBA_SQUARE_CUTOFF ? SIZE_MAX : maximum_count * minimum_count;
+
+        if (__tinypy_internal_long_poll(vm, steps, out_error) == 0) {
+            return TINYPY_FALSE;
+        }
         __tinypy_operator_long_multiply_schoolbook(output, output_capacity, left, left_count, right, right_count);
         return TINYPY_TRUE;
     }
@@ -759,11 +766,14 @@ static uint32_t __tinypy_operator_long_normal_shift(uint32_t top) {
    window of the dividend by its remainder, so the remainder ends in the low
    divisor_count words. quotient, unless NULL, receives dividend_count -
    divisor_count words. */
-static void __tinypy_operator_long_divide_words(uint32_t *dividend, size_t dividend_count, const uint32_t *divisor, size_t divisor_count, uint32_t *quotient) {
+static tinypy_bool_t __tinypy_operator_long_divide_words(tinypy_vm_t *vm, uint32_t *dividend, size_t dividend_count, const uint32_t *divisor, size_t divisor_count, uint32_t *quotient, tinypy_error_t **out_error) {
     uint32_t divisor_top = divisor[divisor_count - 1U];
     uint32_t divisor_next = divisor[divisor_count - 2U];
 
     for (size_t offset = dividend_count - divisor_count; offset != 0U; --offset) {
+        if (__tinypy_internal_long_poll_stride(vm, offset, divisor_count, out_error) == 0) {
+            return TINYPY_FALSE;
+        }
         uint32_t *window = dividend + offset - 1U;
         uint32_t window_top = window[divisor_count];
         uint64_t numerator = ((uint64_t)window_top << 30U) | window[divisor_count - 1U];
@@ -803,23 +813,27 @@ static void __tinypy_operator_long_divide_words(uint32_t *dividend, size_t divid
             quotient[offset - 1U] = digit;
         }
     }
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* x_divrem by a divisor of two words or more already shifted left by shift
    bits: the dividend, of at least divisor_count words and with room for one
    more, is shifted alike, divided, and its remainder shifted back into the
-   low divisor_count words. Returns the number of quotient words. */
-static size_t __tinypy_operator_long_divide_normalized(uint32_t *dividend, size_t dividend_count, const uint32_t *divisor, size_t divisor_count, uint32_t shift, uint32_t *quotient) {
+   low divisor_count words; out_quotient_count receives the number of
+   quotient words. */
+static tinypy_bool_t __tinypy_operator_long_divide_normalized(tinypy_vm_t *vm, uint32_t *dividend, size_t dividend_count, const uint32_t *divisor, size_t divisor_count, uint32_t shift, uint32_t *quotient, size_t *out_quotient_count, tinypy_error_t **out_error) {
     uint32_t carry = __tinypy_operator_long_shift_words_left(dividend, dividend, dividend_count, shift);
 
     if (carry != 0U || dividend[dividend_count - 1U] >= divisor[divisor_count - 1U]) {
         dividend[dividend_count] = carry;
         dividend_count += 1U;
     }
-    __tinypy_operator_long_divide_words(dividend, dividend_count, divisor, divisor_count, quotient);
+    if (__tinypy_operator_long_divide_words(vm, dividend, dividend_count, divisor, divisor_count, quotient, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
     __tinypy_operator_long_shift_words_right(dividend, dividend, divisor_count, shift);
-    size_t quotient_count = dividend_count - divisor_count;
-    return quotient_count;
+    *out_quotient_count = dividend_count - divisor_count;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_operator_long_divide_views(tinypy_vm_t *vm, const tinypy_integer_view_t *left, const tinypy_integer_view_t *right, tinypy_operator_long_division_result_e result_kind, tinypy_error_t **out_error) {
@@ -866,7 +880,10 @@ static tinypy_value_t *__tinypy_operator_long_divide_views(tinypy_vm_t *vm, cons
     else if (comparison >= 0) {
         shift = __tinypy_operator_long_normal_shift(divisor[divisor_count - 1U]);
         (void)__tinypy_operator_long_shift_words_left(divisor, divisor, divisor_count, shift);
-        quotient_count = __tinypy_operator_long_divide_normalized(dividend, dividend_count, divisor, divisor_count, shift, quotient);
+        if (__tinypy_operator_long_divide_normalized(vm, dividend, dividend_count, divisor, divisor_count, shift, quotient, &quotient_count, out_error) == 0) {
+            __tinypy_operator_long_release_words(vm, scratch, local_words, scratch_count);
+            return NULL;
+        }
         remainder_count = divisor_count;
     }
     quotient_count = __tinypy_operator_long_trim_words(quotient, quotient_count);
@@ -929,10 +946,12 @@ static uint32_t __tinypy_operator_view_bits(const tinypy_integer_view_t *view, s
 }
 //////////////////////////////////////////////////////////////////////////
 /* Reduces the words, with room for one more, in place by the modulus and
-   returns the count of the remainder. */
-static size_t __tinypy_operator_long_reduce_words(const tinypy_operator_long_modulus_t *modulus, uint32_t *words, size_t count) {
+   replaces their count by the count of the remainder. */
+static tinypy_bool_t __tinypy_operator_long_reduce_words(tinypy_vm_t *vm, const tinypy_operator_long_modulus_t *modulus, uint32_t *words, size_t *in_out_count, tinypy_error_t **out_error) {
+    size_t count = *in_out_count;
+
     if (count < modulus->count) {
-        return count;
+        return TINYPY_TRUE;
     }
     if (modulus->count == 1U) {
         uint64_t rest = 0U;
@@ -941,11 +960,15 @@ static size_t __tinypy_operator_long_reduce_words(const tinypy_operator_long_mod
             rest = ((rest << 30U) | words[index - 1U]) % modulus->words[0];
         }
         words[0] = (uint32_t)rest;
-        return rest != 0U ? 1U : 0U;
+        *in_out_count = rest != 0U ? 1U : 0U;
+        return TINYPY_TRUE;
     }
-    (void)__tinypy_operator_long_divide_normalized(words, count, modulus->normalized, modulus->count, modulus->shift, NULL);
-    size_t remainder_count = __tinypy_operator_long_trim_words(words, modulus->count);
-    return remainder_count;
+    size_t quotient_count;
+    if (__tinypy_operator_long_divide_normalized(vm, words, count, modulus->normalized, modulus->count, modulus->shift, NULL, &quotient_count, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    *in_out_count = __tinypy_operator_long_trim_words(words, modulus->count);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* output = left * right reduced by the modulus, as MULT in long_pow: both
@@ -959,7 +982,9 @@ static tinypy_bool_t __tinypy_operator_long_multiply_modulo(tinypy_vm_t *vm, con
         return TINYPY_FALSE;
     }
     product_count = __tinypy_operator_long_trim_words(product, product_count);
-    product_count = __tinypy_operator_long_reduce_words(modulus, product, product_count);
+    if (__tinypy_operator_long_reduce_words(vm, modulus, product, &product_count, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
     (void)memcpy(output, product, product_count * sizeof(*product));
     *output_count = product_count;
     return TINYPY_TRUE;
@@ -1071,7 +1096,10 @@ static tinypy_value_t *__tinypy_operator_long_power_modulo(tinypy_vm_t *vm, cons
     reduction.count = count;
     size_t base_count = __tinypy_operator_long_pack_words(reduced_base, base->digits, base->count);
 
-    base_count = __tinypy_operator_long_reduce_words(&reduction, reduced_base, base_count);
+    if (__tinypy_operator_long_reduce_words(vm, &reduction, reduced_base, &base_count, out_error) == 0) {
+        __tinypy_operator_long_release_words(vm, scratch, local_words, scratch_count);
+        return NULL;
+    }
     if (base->sign < 0 && base_count != 0U) {
         (void)memcpy(product, modulus_words, count * sizeof(*product));
         base_count = __tinypy_operator_long_subtract_words(product, count, reduced_base, base_count);
@@ -2144,7 +2172,7 @@ static tinypy_bool_t __tinypy_operator_same_slot(const tinypy_operator_binary_sp
    naming it when the slot requires the method. */
 static tinypy_value_t *__tinypy_operator_call_type_method(tinypy_value_t *receiver, tinypy_value_t *name, tinypy_value_t *const *arguments, size_t argument_count, tinypy_bool_t required, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(receiver);
-    tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, receiver->type, name);
+    tinypy_value_t *attribute = __tinypy_internal_object_special_attribute(vm, receiver, name);
 
     if (attribute == NULL) {
         if (required != 0) {
@@ -4432,9 +4460,21 @@ tinypy_value_t *tinypy_internal_unary_builtin(tinypy_value_t *value, int32_t mod
     }
     double real = TINYPY_COMPLEX_OBJECT(value)->real;
     double imaginary = TINYPY_COMPLEX_OBJECT(value)->imaginary;
+
+    /* c_abs applies the C99 rule itself rather than trusting hypot with
+       signalling NaNs: an infinite part gives infinity even beside a NaN,
+       and any other NaN part gives the default NaN. */
+    if (isinf(real) || isinf(imaginary)) {
+        tinypy_value_t *infinite = tinypy_float_from_double(vm, INFINITY);
+        return infinite;
+    }
+    if (isnan(real) || isnan(imaginary)) {
+        tinypy_value_t *not_a_number = tinypy_float_from_double(vm, NAN);
+        return not_a_number;
+    }
     double absolute = hypot(real, imaginary);
 
-    if (isinf(absolute) && isfinite(real) && isfinite(imaginary)) {
+    if (isinf(absolute)) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "absolute value too large", out_error);
         return NULL;
     }

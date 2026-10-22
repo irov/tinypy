@@ -334,13 +334,17 @@ static tinypy_value_t *__tinypy_dictproxy_cmp_method(tinypy_value_t *function, t
     int32_t less;
 
     (void)user_data;
-    if (__tinypy_dictproxy_arguments(vm, args, kwargs, 2U, 2U, out_error) == 0) {
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == 0) {
         return NULL;
     }
     self = TINYPY_TUPLE_GET(args, 0U);
     other = TINYPY_TUPLE_GET(args, 1U);
+    tinypy_bool_t proxy = tinypy_internal_dictproxy_check(other);
+    if (tinypy_internal_compare_cmp_argument(self, other, proxy, out_error) == 0) {
+        return NULL;
+    }
     left = tinypy_internal_dictproxy_dict(self);
-    right = tinypy_internal_dictproxy_check(other) != 0 ? tinypy_internal_dictproxy_dict(other) : other;
+    right = tinypy_internal_dictproxy_dict(other);
     equal = tinypy_compare_bool(left, right, TINYPY_COMPARE_EQUAL, out_error);
     if (equal < 0) {
         return NULL;
@@ -389,7 +393,7 @@ void tinypy_internal_initialize_dictproxy_type(tinypy_vm_t *vm) {
     spec.iter = __tinypy_dictproxy_iter;
     spec.has_instance_dict = TINYPY_FALSE;
     spec.has_weakrefs = TINYPY_FALSE;
-    vm->dictproxy_type = tinypy_native_type_new_key(vm->internal_dictproxy_key, NULL, 0U, NULL, &spec, NULL);
+    vm->dictproxy_type = tinypy_internal_native_type_new_key(vm->internal_dictproxy_key, NULL, 0U, NULL, &spec, NULL);
     vm->dictproxy_type->release_references = __tinypy_dictproxy_release_references;
     vm->dictproxy_type->traverse_references = __tinypy_dictproxy_traverse_references;
     vm->dictproxy_type->flags = (vm->dictproxy_type->flags | TINYPY_TYPE_FLAG_IMMUTABLE) & ~TINYPY_TYPE_FLAG_BASE_TYPE;

@@ -572,6 +572,18 @@ static tinypy_bool_t __tinypy_builtin_check_class(tinypy_vm_t *vm, tinypy_value_
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The __class__ that recursive_isinstance reads, clearing any error of the
+   lookup: a missing one builds no AttributeError. */
+static TINYPY_ALWAYS_INLINE tinypy_value_t *__tinypy_builtin_reported_class(tinypy_value_t *object) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(object);
+    tinypy_value_t *reported;
+
+    if (tinypy_internal_object_get_optional_attr_key(object, vm->internal_special_class_key, &reported, NULL) < 0) {
+        tinypy_vm_clear_error(vm);
+    }
+    return reported;
+}
+//////////////////////////////////////////////////////////////////////////
 /* recursive_isinstance and recursive_issubclass, which
    _PyObject_RealIsInstance and _PyObject_RealIsSubclass call without the
    hooks of a metaclass. */
@@ -603,15 +615,10 @@ static TINYPY_ALWAYS_INLINE int32_t __tinypy_builtin_real_instance_check(tinypy_
             return 1;
         }
         /* The __class__ attribute may name a different class, as with proxies. */
-        tinypy_error_t *lookup_error = NULL;
-        tinypy_value_t *reported = tinypy_object_get_attr_value(object, vm->internal_special_class_key, &lookup_error);
+        tinypy_value_t *reported = __tinypy_builtin_reported_class(object);
         int32_t result = 0;
 
         if (reported == NULL) {
-            if (lookup_error != NULL) {
-                tinypy_error_release(lookup_error);
-            }
-            tinypy_vm_clear_error(vm);
             return 0;
         }
         if (reported != &object->type->base.base && TINYPY_VALUE_KIND(reported) == TINYPY_VALUE_TYPE) {
@@ -623,15 +630,10 @@ static TINYPY_ALWAYS_INLINE int32_t __tinypy_builtin_real_instance_check(tinypy_
     if (__tinypy_builtin_check_class(vm, classinfo, "isinstance() arg 2 must be a class, type, or tuple of classes and types", out_error) == 0) {
         return -1;
     }
-    tinypy_error_t *lookup_error = NULL;
-    tinypy_value_t *reported = tinypy_object_get_attr_value(object, vm->internal_special_class_key, &lookup_error);
+    tinypy_value_t *reported = __tinypy_builtin_reported_class(object);
     int32_t result;
 
     if (reported == NULL) {
-        if (lookup_error != NULL) {
-            tinypy_error_release(lookup_error);
-        }
-        tinypy_vm_clear_error(vm);
         return 0;
     }
     result = __tinypy_builtin_abstract_issubclass(vm, reported, classinfo, out_error);
@@ -787,25 +789,11 @@ static tinypy_value_t *__tinypy_builtin_hasattr(tinypy_value_t *function, tinypy
     if (name == NULL) {
         return NULL;
     }
-    /* A missing attribute answers False without raising an AttributeError. */
-    tinypy_value_t *attribute;
-    int32_t status = tinypy_internal_object_get_optional_attr_key(items[0U], name, &attribute, out_error);
-    tinypy_bool_t found = status > 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    int32_t found = tinypy_internal_object_has_attr_key(items[0U], name, out_error);
 
     TINYPY_DECREF(name);
-    if (status > 0) {
-        TINYPY_DECREF(attribute);
-    }
-    else if (status < 0) {
-        if (vm->raised_type != NULL && (TINYPY_VALUE_KIND(vm->raised_type) != TINYPY_VALUE_TYPE ||
-            tinypy_type_is_subtype((tinypy_type_t *)vm->raised_type, vm->exception_types[TINYPY_EXCEPTION_EXCEPTION]) == 0)) {
-            return NULL;
-        }
-        if (out_error != NULL && *out_error != NULL) {
-            tinypy_error_release(*out_error);
-            *out_error = NULL;
-        }
-        tinypy_internal_exception_clear_raised(vm);
+    if (found < 0) {
+        return NULL;
     }
     tinypy_value_t *result = tinypy_bool_from_i32(vm, found);
     return result;
@@ -1650,6 +1638,7 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
     size_t result_hint = 0U;
     tinypy_value_t *result;
     tinypy_internal_exception_state_t pending = {NULL, NULL, NULL};
+    uint64_t pending_epoch = 0U;
 
     (void)user_data;
     if (__tinypy_builtin_no_keywords(function, kwargs, out_error) == 0 || __tinypy_builtin_argument_count_message(vm, args, 2U, SIZE_MAX, "map() requires at least two args", out_error) == 0) {
@@ -1724,15 +1713,17 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
         tinypy_error_t *hint_error = NULL;
         if (tinypy_internal_length_hint(item, INT64_C(8), &hint, &hint_error) == 0) {
             /* builtin_map leaves the error of _PyObject_LengthHint pending:
-               the TypeError of a later new-style operand without __len__, a
-               StopIteration or the IndexError ending a sequence iterator
-               replaces it, and an iterator that ends without an exception
-               reports it. */
+               any exception raised later replaces it, as the TypeError of a
+               later new-style operand without __len__ and the IndexError
+               ending a sequence iterator do without being raised here, and
+               an iterator that ends without an exception reports it unless
+               it is a StopIteration, which PyIter_Next clears. */
             if (hint_error != NULL) {
                 tinypy_error_release(hint_error);
             }
             __tinypy_builtin_exception_state_release(&pending);
             tinypy_internal_exception_preserve_begin(vm, &pending);
+            pending_epoch = vm->raised_epoch;
             continue;
         }
         if (TINYPY_VALUE_KIND(item) != TINYPY_VALUE_OLD_INSTANCE && tinypy_internal_object_has_special_key(item, vm->internal_special_length_key) == 0) {
@@ -1771,9 +1762,11 @@ static tinypy_value_t *__tinypy_builtin_map(tinypy_value_t *function, tinypy_val
                 if (iterators[iterable_index]->type == &vm->types[TINYPY_VALUE_ITERATOR]) {
                     stopped = TINYPY_TRUE;
                 }
-                if (iteration_error == NULL && stopped == 0 && pending.type != NULL) {
+                if (iteration_error == NULL && stopped == 0 && pending.type != NULL && vm->raised_epoch == pending_epoch) {
                     tinypy_internal_exception_preserve_end(vm, &pending);
-                    tinypy_internal_exception_make_diagnostic(vm, &iteration_error);
+                    if (tinypy_internal_exception_consume_stop_iteration(vm, NULL) == 0) {
+                        tinypy_internal_exception_make_diagnostic(vm, &iteration_error);
+                    }
                 }
                 __tinypy_builtin_exception_state_release(&pending);
                 if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != 0) {

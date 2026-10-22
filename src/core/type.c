@@ -1947,7 +1947,7 @@ static tinypy_type_t *__tinypy_internal_type_new(tinypy_value_t *internal_name_k
     /* The type owns a private copy of the namespace, as type_new does in
        Python 2.7: the caller's dictionary must stay independent of the type. */
     dict = tinypy_dict_new(vm);
-    if (namespace_dict != NULL && tinypy_internal_dict_update_from(dict, namespace_dict, "NULL result without error in PyObject_Call", out_error) == 0) {
+    if (namespace_dict != NULL && tinypy_internal_dict_update_mapping(dict, namespace_dict, out_error) == 0) {
         TINYPY_DECREF(own_slots);
         TINYPY_DECREF(dict);
         if (mro_types != NULL) {

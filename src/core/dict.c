@@ -979,10 +979,49 @@ tinypy_value_t *tinypy_internal_mapping_keys(tinypy_value_t *mapping, tinypy_err
     return keys;
 }
 //////////////////////////////////////////////////////////////////////////
+/* PyDict_Merge presizes for another dictionary, a subclass included, and
+   stores its entries with their hashes through insertdict, which does not
+   resize again. */
+static TINYPY_ALWAYS_INLINE tinypy_bool_t __tinypy_internal_dict_merge_entries(tinypy_vm_t *vm, tinypy_value_t *target, tinypy_value_t *source, tinypy_error_t **out_error) {
+    if (target == source || TINYPY_DICT_SIZE(source) == 0U) {
+        return TINYPY_TRUE;
+    }
+    if (tinypy_internal_dict_merge_reserve_checked(vm, target, TINYPY_DICT_SIZE(source), out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    size_t index;
+
+    for (index = 0U; index <= TINYPY_DICT_OBJECT(source)->mask; ++index) {
+        tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(source)->table[index];
+
+        if (!TINYPY_DICT_ENTRY_IS_ACTIVE(entry)) {
+            continue;
+        }
+        tinypy_value_t *key = entry->key;
+        tinypy_value_t *value = entry->value;
+        tinypy_hash_t hash = entry->hash;
+        TINYPY_INCREF(key);
+        TINYPY_INCREF(value);
+        tinypy_bool_t inserted = tinypy_internal_dict_insert_checked(vm, target, key, value, hash, out_error);
+        TINYPY_DECREF(value);
+        TINYPY_DECREF(key);
+        if (inserted == 0) {
+            return TINYPY_FALSE;
+        }
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 /* PyDict_Merge copies any mapping other than a dict through
-   PyMapping_Keys and its item protocol. */
+   PyMapping_Keys and its item protocol, growing the table one key at a
+   time. */
 tinypy_bool_t tinypy_internal_dict_update_mapping(tinypy_value_t *target, tinypy_value_t *source, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
+
+    if (TINYPY_VALUE_KIND(source) == TINYPY_VALUE_DICT) {
+        tinypy_bool_t merged = __tinypy_internal_dict_merge_entries(vm, target, source, out_error);
+        return merged;
+    }
     tinypy_value_t *keys = tinypy_internal_mapping_keys(source, out_error);
 
     if (keys == NULL) {
@@ -1021,48 +1060,17 @@ tinypy_bool_t tinypy_internal_dict_update_mapping(tinypy_value_t *target, tinypy
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
-/* PyDict_Merge presizes for another dictionary and stores its entries with
-   their hashes through insertdict, which does not resize again; mappings and
-   sequences of pairs grow the table one key at a time. */
+/* dict_update_common merges an argument with a keys attribute, which it
+   probes like PyObject_HasAttrString, through PyDict_Merge and any other as
+   a sequence of pairs. The probe discards the attribute and clears any
+   failure; that of an exact dict finds its own method. */
 tinypy_bool_t tinypy_internal_dict_update_from(tinypy_value_t *target, tinypy_value_t *source, const char *negative_hint_message, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(target);
 
-    if (target == source) {
-        return TINYPY_TRUE;
+    if (source->type == &vm->types[TINYPY_VALUE_DICT]) {
+        tinypy_bool_t merged = __tinypy_internal_dict_merge_entries(vm, target, source, out_error);
+        return merged;
     }
-    if (TINYPY_VALUE_KIND(source) == TINYPY_VALUE_DICT) {
-        if (TINYPY_DICT_SIZE(source) == 0U) {
-            return TINYPY_TRUE;
-        }
-        if (tinypy_internal_dict_merge_reserve_checked(vm, target, TINYPY_DICT_SIZE(source), out_error) == 0) {
-            return TINYPY_FALSE;
-        }
-        size_t index;
-
-        for (index = 0U; index <= TINYPY_DICT_OBJECT(source)->mask; ++index) {
-            tinypy_dict_entry_t *entry = &TINYPY_DICT_OBJECT(source)->table[index];
-
-            if (!TINYPY_DICT_ENTRY_IS_ACTIVE(entry)) {
-                continue;
-            }
-            tinypy_value_t *key = entry->key;
-            tinypy_value_t *value = entry->value;
-            tinypy_hash_t hash = entry->hash;
-            TINYPY_INCREF(key);
-            TINYPY_INCREF(value);
-            tinypy_bool_t inserted = tinypy_internal_dict_insert_checked(vm, target, key, value, hash, out_error);
-            TINYPY_DECREF(value);
-            TINYPY_DECREF(key);
-            if (inserted == 0) {
-                return TINYPY_FALSE;
-            }
-        }
-        return TINYPY_TRUE;
-    }
-
-    /* dict_update_common probes keys like PyObject_HasAttrString: the
-       attribute is discarded, any failure is cleared, and PyMapping_Keys
-       fetches it again. */
     tinypy_value_t *keys_probe;
     tinypy_error_t *probe_error = NULL;
     int32_t mapping_status = tinypy_internal_object_get_optional_attr_key(source, vm->internal_keys_key, &keys_probe, &probe_error);

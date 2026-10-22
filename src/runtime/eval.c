@@ -2012,6 +2012,11 @@ static tinypy_bool_t __tinypy_eval_poll_interrupt(tinypy_vm_t *vm, tinypy_error_
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_internal_eval_poll_interrupt(tinypy_vm_t *vm, tinypy_error_t **out_error) {
+    tinypy_bool_t running = __tinypy_eval_poll_interrupt(vm, out_error);
+    return running;
+}
+//////////////////////////////////////////////////////////////////////////
 /* Every loop takes a backward jump, so a backward jump polls the host for
    an interrupt before the evaluator takes it. */
 static inline tinypy_eval_reason_e __tinypy_eval_jump(tinypy_vm_t *vm, size_t offset, size_t target, size_t *out_instruction_offset, tinypy_error_t **out_error) {

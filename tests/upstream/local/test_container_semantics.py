@@ -303,6 +303,42 @@ class ContainerSemantics(unittest.TestCase):
             dict(Source('text'))
         self.assertEqual(str(failure.exception), "attribute of type 'str' is not callable")
 
+    def test_dict_merge_probes_keys_of_dict_subclasses(self):
+        lookups = []
+        class NoKeys(dict):
+            @property
+            def keys(self):
+                raise AttributeError('keys')
+        class Logged(dict):
+            def __getattribute__(self, name):
+                lookups.append(name)
+                return dict.__getattribute__(self, name)
+        class OwnKeys(dict):
+            def keys(self):
+                lookups.append('keys called')
+                return ['unused']
+        self.assertEqual(dict(NoKeys({(5, 6): 3})), {5: 6})
+        with self.assertRaises(TypeError) as failure:
+            dict(NoKeys({1: 3}))
+        self.assertEqual(str(failure.exception), 'cannot convert dictionary update sequence element #0 to a sequence')
+        target = {}
+        target.update(NoKeys({('a', 'b'): 0}))
+        self.assertEqual(target, {'a': 'b'})
+        target = {}
+        dict.__init__(target, NoKeys({'xy': 0}))
+        self.assertEqual(target, {'x': 'y'})
+        source = NoKeys({(1, 2): 3})
+        self.assertRaises(RuntimeError, source.update, source)
+        self.assertEqual(dict(Logged({1: 2})), {1: 2})
+        self.assertEqual(lookups, ['keys'])
+        del lookups[:]
+        self.assertEqual((Logged({1: 2}).copy(), dict(OwnKeys({3: 4})), NoKeys({5: 6}).copy()), ({1: 2}, {3: 4}, {5: 6}))
+        self.assertEqual(lookups, ['copy'])
+        del lookups[:]
+        self.assertEqual(type('Namespace', (object,), Logged({'value': 7})).value, 7)
+        self.assertEqual(type('Namespace', (object,), NoKeys({'value': 8})).value, 8)
+        self.assertEqual(lookups, [])
+
     def test_dict_iterator_value_replacement_is_allowed(self):
         source = {'first': 1, 'second': 2}
         iterator = source.iteritems()
@@ -1223,6 +1259,62 @@ class ContainerSemantics(unittest.TestCase):
             Plain().__cmp__(1)
         self.assertEqual(str(failure.exception), "Plain.__cmp__(x,y) requires y to be a 'Plain', not a 'int'")
 
+    def test_dict_cmp_wrapper_compares_the_dictionaries(self):
+        class Delegating(dict):
+            def __cmp__(self, other):
+                return dict.__cmp__(self, other)
+        class Equal(dict):
+            def __eq__(self, other):
+                return True
+            def __lt__(self, other):
+                return True
+        class Own(dict):
+            def __cmp__(self, other):
+                return 0
+        class Other(dict):
+            def __cmp__(self, other):
+                return 0
+        class Plain(dict):
+            pass
+        first, second = Delegating({1: 2}), Delegating({1: 3})
+        self.assertEqual((cmp(first, second), first < second, sorted([second, first]) == [first, second], dict.__cmp__(second, first)), (-1, True, True, 1))
+        self.assertEqual((dict.__cmp__(Equal({1: 2}), {3: 4}), dict.__cmp__({3: 4}, Equal({1: 2})), dict.__cmp__(Equal({1: 2}), {})), (-1, 1, 1))
+        self.assertEqual((dict.__cmp__({}, Own()), dict.__cmp__({}, Own({1: 2})), dict.__cmp__(Own({1: 2}), Plain())), (0, -1, 1))
+        with self.assertRaises(TypeError) as failure:
+            dict.__cmp__(Own(), Other())
+        self.assertEqual(str(failure.exception), "Own.__cmp__(x,y) requires y to be a 'Own', not a 'Other'")
+        with self.assertRaises(TypeError) as failure:
+            dict.__cmp__(Plain(), Own())
+        self.assertEqual(str(failure.exception), "Plain.__cmp__(x,y) requires y to be a 'Plain', not a 'Own'")
+        class Ordered(set):
+            def __cmp__(self, other):
+                return 0
+        class Sibling(frozenset):
+            def __cmp__(self, other):
+                return 0
+        for wrapper, left, right in ((set.__cmp__, set(), frozenset()), (frozenset.__cmp__, frozenset(), set()), (set.__cmp__, set(), Ordered()), (set.__cmp__, Ordered(), frozenset())):
+            with self.assertRaises(TypeError) as failure:
+                wrapper(left, right)
+            self.assertEqual(str(failure.exception), 'cannot compare sets using cmp()')
+        with self.assertRaises(TypeError) as failure:
+            set.__cmp__(Ordered(), Sibling())
+        self.assertEqual(str(failure.exception), "Ordered.__cmp__(x,y) requires y to be a 'Ordered', not a 'Sibling'")
+
+    def test_dictproxy_cmp_wrapper_requires_a_dictproxy(self):
+        class First(object):
+            x = 1
+        class Second(object):
+            y = 2
+        proxy = First.__dict__
+        kind = type(proxy)
+        for other in (5, {}, dict(proxy)):
+            with self.assertRaises(TypeError) as failure:
+                kind.__cmp__(proxy, other)
+            self.assertEqual(str(failure.exception), "dictproxy.__cmp__(x,y) requires y to be a 'dictproxy', not a '%s'" % type(other).__name__)
+        self.assertEqual((kind.__cmp__(proxy, proxy), kind.__cmp__(proxy, Second.__dict__) == cmp(dict(proxy), dict(Second.__dict__))), (0, True))
+        self.assertRaises(TypeError, kind.__cmp__, proxy)
+        self.assertRaises(TypeError, proxy.__cmp__, proxy, proxy)
+
     def test_unhashable_messages_name_the_type(self):
         def message(value):
             try:
@@ -1321,6 +1413,48 @@ class ContainerSemantics(unittest.TestCase):
         def remove_slice():
             del Setter()[0:1]
         self.assertEqual((message(store), message(remove), message(remove_slice)), ('__setitem__', '__delitem__', '__delitem__'))
+
+    def test_slice_methods_defined_in_pairs(self):
+        calls = []
+        class Setter(object):
+            def __setslice__(self, low, high, value):
+                calls.append(('set', low, high))
+            def __delitem__(self, key):
+                calls.append('delitem')
+        class Deleter(object):
+            def __delslice__(self, low, high):
+                calls.append(('del', low, high))
+            def __setitem__(self, key, value):
+                calls.append('setitem')
+        class Classic:
+            def __setslice__(self, low, high, value):
+                calls.append(('set', low, high))
+            def __delitem__(self, key):
+                calls.append(('delitem', key))
+        class Items(list):
+            def __setslice__(self, low, high, value):
+                calls.append(('set', low, high))
+        def message(function, target):
+            try:
+                function(target)
+            except AttributeError as exception:
+                return str(exception)
+            raise AssertionError('no AttributeError')
+        def remove(target):
+            del target[0:1]
+        def store(target):
+            target[0:1] = [5]
+        Setter()[0:1] = [5]
+        del Deleter()[1:2]
+        self.assertEqual((message(remove, Setter()), message(store, Deleter())), ('__delslice__', '__setslice__'))
+        del Setter()[::2]
+        Deleter()[::2] = [5]
+        del Classic()[0:1]
+        items = Items([1, 2, 3])
+        del items[0:1]
+        items[0:1] = [5]
+        self.assertEqual(items, [2, 3])
+        self.assertEqual(calls, [('set', 0, 1), ('del', 1, 2), 'delitem', 'setitem', ('delitem', slice(0, 1, None)), ('set', 0, 1)])
 
     def test_reversed_steps_past_an_item_only_once_it_has_it(self):
         exhausted = []

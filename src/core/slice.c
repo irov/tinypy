@@ -135,17 +135,10 @@ static tinypy_value_t *__tinypy_slice_cmp_method(tinypy_value_t *function, tinyp
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return NULL;
     }
-    int32_t equal = tinypy_compare_bool(left, right, TINYPY_COMPARE_EQUAL, out_error);
-    if (equal < 0) {
+    /* slice_compare orders the three fields with PyObject_Cmp. */
+    int32_t order;
+    if (tinypy_internal_compare_three_way(left, right, &order, out_error) == 0) {
         return NULL;
-    }
-    int64_t order = 0;
-    if (equal == 0) {
-        int32_t less = tinypy_compare_bool(left, right, TINYPY_COMPARE_LESS, out_error);
-        if (less < 0) {
-            return NULL;
-        }
-        order = less != 0 ? INT64_C(-1) : INT64_C(1);
     }
     tinypy_value_t *return_value_1 = tinypy_integer_from_i64(vm, order);
     return return_value_1;

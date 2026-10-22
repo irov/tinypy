@@ -725,7 +725,24 @@ Host native type вызывает только callbacks собственной 
 `tinypy_native_type_update_spec` пересчитывает slots по тому же правилу и
 возвращает generic поведение удалённому callback; Python-подклассы, созданные
 раньше, сохраняют скопированные при создании callbacks, а host native подтипы
-сохраняют свою spec. Базы `tinypy_native_type_new` сохраняют раскладку
+сохраняют свою spec. Как `add_operators` для C-типа, host native type
+публикует в своём словаре slot wrapper для каждого callback своей spec под
+именем его special method: `__setattr__` и `__delattr__` для `set_attribute`,
+`__lt__`…`__ge__` для `compare`, `__radd__` и `__iadd__` для reflected и
+in-place callbacks, `__delitem__` для `mapping_set`; mapping callback занимает
+имя, общее с sequence callback. Имя, которое задаёт namespace типа, сохраняет
+своё значение, `tinypy_type_set_attr` заменяет wrapper, а
+`tinypy_native_type_update_spec` публикует и снимает wrappers добавленных и
+удалённых callbacks, не заменяя других значений. Wrapper вызывает callback
+spec опубликовавшего его типа, так что Python-подкласс делегирует ему через
+`super()` или через сам тип; операции над экземпляром по-прежнему идут через
+slots его типа, и поиск special methods видит вместо такого wrapper атрибут
+ближайшей базы, не являющейся host native type. `get_attribute` и
+`set_attribute` служат `tp_getattro` и `tp_setattro` типа: `set_attribute`
+получает каждое присваивание атрибута раньше дескрипторов типа и каждое
+удаление с NULL значением, как `mapping_set` получает удаление элемента, а
+`object.__setattr__` и `object.__delattr__` остаются generic и callback не
+вызывают. Базы `tinypy_native_type_new` сохраняют раскладку
 `object` или host native type; база со встроенной раскладкой, например `list`
 или исключение, отвергается с TypeError «native type base '…' has an
 incompatible instance layout». Присваивание `__class__` и `__bases__` не
@@ -876,6 +893,8 @@ codec registry хранит под именем `strict`, как в CPython. Tok
 начиная с чтения, в котором встретилась первая ошибка, а остаток файла после
 этого чтения декодируется одним вызовом. Unicode literal получает замену
 недопустимой последовательности UTF-8 в виде escapes, как в `decode_unicode`,
+целиком при любой длине (CPython 2.7 пишет escapes замены длиннее литерала за
+пределы буфера, рассчитанного по литералу),
 а замену escape, который не разбирают `unicodeescape` и `rawunicodeescape`,
 с продолжением разбора с возвращённой позиции; byte literal источника с ASCII
 cookie кодируется обратно строгим ASCII encoder. В литерале только
@@ -1206,7 +1225,12 @@ Evaluator вызывает `poll_interrupt` при входе в frame и пер
 переходом назад: `JUMP_ABSOLUTE`, `CONTINUE_LOOP` и условными переходами.
 Любой цикл, в том числе в загруженном bytecode, проходит через такой переход,
 поэтому host может прервать его: true из `poll_interrupt` поднимает
-`KeyboardInterrupt` (`TINYPY_ERROR_INTERRUPT`).
+`KeyboardInterrupt` (`TINYPY_ERROR_INTERRUPT`). Как `SIGCHECK` в `x_mul`,
+`x_divrem` и `long_format`, квадратичные ядра длинных чисел (умножение,
+деление и остаток, `pow` по модулю, перевод в десятичный текст) опрашивают
+host после каждых 65536 шагов по словам, поэтому прерывается и одна долгая
+операция. Во время компиляции ядра host не опрашивают: свёртка констант,
+которую он прервал бы, отбросила бы interrupt вместе со своей ошибкой.
 
 Debugger (`TINYPY_DEBUGGER`, только Debug build, `debugger.h`) получает
 события trace function, которую в CPython устанавливает `PyEval_SetTrace`.

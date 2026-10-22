@@ -1495,6 +1495,69 @@ static int32_t __test_runtime_interrupt_polling(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+/* The quadratic long kernels poll the host as x_mul, x_divrem and
+   long_format check signals: one product, division, modular power or
+   decimal conversion is interrupted at the first poll after the frame
+   entry, while the constant folds of the compiler do not poll. */
+static int32_t __test_long_kernel_interrupt_polling(void) {
+    static const char *const sources[] = {
+        "value = 7 ** 30000\nvalue * value\n",
+        "value = 7 ** 30000\nvalue * (value + 1)\n",
+        "value = 7 ** 30000\nvalue * 7 ** 500\n",
+        "dividend = 7 ** 60000\ndivisor = 7 ** 30000 + 1\ndivmod(-dividend, divisor)\n",
+        "pow(7 ** 300, 7 ** 3000, 3 ** 5000)\n",
+        "str(7 ** 30000)\n",
+        "value = 7 ** 30000\n'%d' % value\n"
+    };
+    static const char folded[] = "value = 7 ** 60000\n";
+    test_allocator_state_t state = {0U, 0U};
+    test_interrupt_host_t interrupt_host = {0U, 2U};
+    tinypy_allocator_t allocator;
+    tinypy_host_t host;
+    tinypy_vm_config_t config;
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+
+    (void)memset(&allocator, 0, sizeof(allocator));
+    allocator.abi_version = TINYPY_ABI_VERSION;
+    allocator.struct_size = (uint32_t)sizeof(allocator);
+    allocator.user_data = &state;
+    allocator.allocate = &__test_allocate;
+    allocator.reallocate = &__test_reallocate;
+    allocator.deallocate = &__test_deallocate;
+    (void)memset(&host, 0, sizeof(host));
+    host.abi_version = TINYPY_ABI_VERSION;
+    host.struct_size = (uint32_t)sizeof(host);
+    host.user_data = &interrupt_host;
+    host.poll_interrupt = &__test_poll_interrupt;
+    (void)memset(&config, 0, sizeof(config));
+    config.abi_version = TINYPY_ABI_VERSION;
+    config.struct_size = (uint32_t)sizeof(config);
+    config.allocator = &allocator;
+    config.host = &host;
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    for (size_t index = 0U; index < sizeof(sources) / sizeof(sources[0]); ++index) {
+        interrupt_host.polls = 0U;
+        tinypy_value_t *result = tinypy_exec_source(vm, sources[index], strlen(sources[index]), "interrupt.py", 12U, globals, NULL, &options, &error);
+        assert(result == NULL);
+        assert(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_INTERRUPT);
+        assert(interrupt_host.polls == 2U);
+        tinypy_error_release(error);
+        error = NULL;
+    }
+    interrupt_host.polls = 0U;
+    tinypy_value_t *result = tinypy_exec_source(vm, folded, sizeof(folded) - 1U, "interrupt.py", 12U, globals, NULL, &options, &error);
+    assert(result != NULL && error == NULL);
+    assert(interrupt_host.polls == 1U);
+    tinypy_release(result);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_compile_modes_and_optimize(void) {
     test_allocator_state_t state = {0U, 0U};
     tinypy_vm_t *vm = __test_vm_create(&state, 0);
@@ -3146,6 +3209,9 @@ int main(void) {
         return EXIT_FAILURE;
     }
     if (__test_runtime_interrupt_polling() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_long_kernel_interrupt_polling() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_compile_modes_and_optimize() != 0) {

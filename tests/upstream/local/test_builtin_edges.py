@@ -1234,6 +1234,44 @@ class BuiltinEdges(unittest.TestCase):
         for function, expected in cases:
             self.assertEqual(error_text(function), expected)
 
+    def test_cmp_wrappers_compare_with_their_own_slot(self):
+        class Delegating(int):
+            def __cmp__(self, other):
+                return int.__cmp__(self, other)
+        class Equal(long):
+            def __eq__(self, other):
+                return True
+            def __lt__(self, other):
+                return True
+        class Own(int):
+            def __cmp__(self, other):
+                return 0
+        class Plain(int):
+            pass
+        self.assertEqual((cmp(Delegating(1), Delegating(2)), Delegating(3) < Delegating(2)), (-1, False))
+        self.assertEqual((long.__cmp__(Equal(1), 2L), long.__cmp__(2L, Equal(1)), int.__cmp__(Plain(5), True), int.__cmp__(1, Own(2))), (-1, 1, 1, -1))
+        self.assertEqual(error_text(int.__cmp__, Plain(1), Own(2)), "TypeError: Plain.__cmp__(x,y) requires y to be a 'Plain', not a 'Own'")
+        self.assertEqual(error_text(int.__cmp__, 1, 1L), "TypeError: int.__cmp__(x,y) requires y to be a 'int', not a 'long'")
+        class Ordered(object):
+            def __eq__(self, other):
+                return True
+            def __cmp__(self, other):
+                return -1
+        shared = Ordered()
+        self.assertEqual((slice.__cmp__(slice(Ordered()), slice(Ordered())), slice.__cmp__(slice(shared), slice(shared)), slice.__cmp__(slice(1, 3), slice(1, 2))), (-1, 0, 1))
+        def cell(value):
+            def function():
+                return value
+            return function.__closure__[0]
+        code = (lambda: 1).__code__
+        for value in (cell(1), code):
+            name = type(value).__name__
+            self.assertEqual(error_text(type(value).__cmp__, value, 5), "TypeError: %s.__cmp__(x,y) requires y to be a '%s', not a 'int'" % (name, name))
+            self.assertEqual(error_text(type(value).__cmp__, value), 'TypeError: expected 1 arguments, got 0')
+            self.assertEqual(error_text(value.__cmp__, value, value), 'TypeError: expected 1 arguments, got 2')
+            self.assertEqual(error_text(value.__cmp__, value, bogus=1), "TypeError: wrapper __cmp__ doesn't take keyword arguments")
+            self.assertEqual(value.__cmp__(value), 0)
+
     def test_range_falls_back_to_long_bounds(self):
         result = range(0, 2 ** 64, 2 ** 63)
         self.assertEqual(result, [0, 2 ** 63])

@@ -105,19 +105,36 @@ static tinypy_bool_t __tinypy_super_lookup(tinypy_super_object_t *super_value, t
     return found;
 }
 //////////////////////////////////////////////////////////////////////////
-/* super_getattro: search the MRO after the starting type, except for
+/* super_getattro: search the MRO after the starting type, except for a str
    __class__ and unbound super, then fall back to the super object itself. */
 tinypy_value_t *tinypy_internal_super_get_attribute(tinypy_value_t *value, tinypy_value_t *name, tinypy_error_t **out_error) {
     tinypy_super_object_t *super_value = TINYPY_SUPER_OBJECT(value);
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
 
-    if (super_value->object_type != NULL && TINYPY_NAME_EQ(name, vm->internal_special_class_key) == TINYPY_FALSE) {
+    if (super_value->object_type != NULL && (TINYPY_VALUE_KIND(name) != TINYPY_VALUE_STRING || TINYPY_NAME_EQ(name, vm->internal_special_class_key) == TINYPY_FALSE)) {
         tinypy_value_t *result = NULL;
         if (__tinypy_super_lookup(super_value, name, &result, out_error) != 0) {
             return result;
         }
     }
     tinypy_value_t *result = tinypy_internal_object_generic_get_attr_key(value, name, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The tp_getattro wrapper passes super_getattro the name as given, whereas
+   PyObject_GetAttr converts a unicode name first. */
+static tinypy_value_t *__tinypy_super_getattribute_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+
+    (void)user_data;
+    if (tinypy_internal_native_method_arguments(function, args, kwargs, 1U, 1U, TINYPY_ARITY_STYLE_WRAPPER, out_error) == TINYPY_FALSE) {
+        return NULL;
+    }
+    tinypy_value_t *name = TINYPY_TUPLE_GET(args, 1U);
+    if (__tinypy_internal_object_check_attribute_name(vm, name, out_error) == TINYPY_FALSE) {
+        return NULL;
+    }
+    tinypy_value_t *result = tinypy_internal_super_get_attribute(TINYPY_TUPLE_GET(args, 0U), name, out_error);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -243,6 +260,7 @@ static tinypy_value_t *__tinypy_super_init_method(tinypy_value_t *function, tiny
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_super_type(tinypy_vm_t *vm) {
     tinypy_type_t *type = &vm->types[TINYPY_VALUE_SUPER];
+    tinypy_internal_type_add_method(type, vm->internal_special_getattribute_key, __tinypy_super_getattribute_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(type, vm->internal_special_get_key, __tinypy_super_get_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(type, vm->internal_special_init_key, __tinypy_super_init_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
 

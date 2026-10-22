@@ -171,7 +171,7 @@ static void __tinypy_representation_integer(tinypy_representation_builder_t *bui
     __tinypy_representation_unsigned_decimal(builder, magnitude, 1U);
 }
 //////////////////////////////////////////////////////////////////////////
-static void __tinypy_representation_long(tinypy_representation_builder_t *builder, const tinypy_value_t *value, tinypy_bool_t raw) {
+static tinypy_bool_t __tinypy_representation_long(tinypy_representation_builder_t *builder, const tinypy_value_t *value, tinypy_bool_t raw, tinypy_error_t **out_error) {
     size_t digit_count = TINYPY_LONG_DIGIT_COUNT(value);
     size_t word_count;
     size_t chunk_capacity;
@@ -188,24 +188,24 @@ static void __tinypy_representation_long(tinypy_representation_builder_t *builde
     }
     if (digit_count == 0U) {
         __tinypy_representation_append(builder, raw != 0 ? "0" : "0L", raw != 0 ? 1U : 2U);
-        return;
+        return TINYPY_TRUE;
     }
     if (digit_count == SIZE_MAX || digit_count / 29U > SIZE_MAX / 15U) {
         builder->failed = TINYPY_TRUE;
-        return;
+        return TINYPY_TRUE;
     }
     word_count = (digit_count + 1U) / 2U;
     chunk_capacity = (digit_count / 29U) * 15U + ((digit_count % 29U) * 15U + 28U) / 29U;
     if (word_count > SIZE_MAX - chunk_capacity || word_count + chunk_capacity > SIZE_MAX / sizeof(*scratch)) {
         builder->failed = TINYPY_TRUE;
-        return;
+        return TINYPY_TRUE;
     }
     scratch_size = (word_count + chunk_capacity) * sizeof(*scratch);
     scratch = (uint32_t *)tinypy_internal_pool_allocate_checked(builder->vm, scratch_size);
     if (scratch == NULL) {
         builder->failed = TINYPY_TRUE;
         builder->memory_failed = TINYPY_TRUE;
-        return;
+        return TINYPY_TRUE;
     }
     work = scratch;
     chunks = scratch + word_count;
@@ -219,6 +219,10 @@ static void __tinypy_representation_long(tinypy_representation_builder_t *builde
     }
     active_digits = word_count;
     while (active_digits != 0U) {
+        if (__tinypy_internal_long_poll_stride(builder->vm, chunk_count, active_digits, out_error) == 0) {
+            tinypy_internal_vm_deallocate(builder->vm, scratch, scratch_size);
+            return TINYPY_FALSE;
+        }
         uint64_t remainder = UINT64_C(0);
         size_t division_index = active_digits;
 
@@ -253,6 +257,7 @@ static void __tinypy_representation_long(tinypy_representation_builder_t *builde
         __tinypy_representation_append_character(builder, (uint8_t)'L');
     }
     tinypy_internal_vm_deallocate(builder->vm, scratch, scratch_size);
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 static size_t __tinypy_representation_normalize_decimal(char *buffer, size_t size) {
@@ -733,7 +738,7 @@ tinypy_value_t *tinypy_internal_object_call_representation(tinypy_value_t *value
         }
     }
     else {
-        tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, value->type, name);
+        tinypy_value_t *attribute = __tinypy_internal_object_special_attribute(vm, value, name);
 
         if (attribute != NULL && tinypy_internal_native_method_applies(attribute, value) != 0) {
             /* The call may drop the method from the type. */
@@ -1117,9 +1122,10 @@ static tinypy_bool_t __tinypy_representation_value_impl(tinypy_representation_bu
     case TINYPY_VALUE_INTEGER:
         __tinypy_representation_integer(builder, TINYPY_INTEGER_VALUE(value));
         return TINYPY_TRUE;
-    case TINYPY_VALUE_LONG:
-        __tinypy_representation_long(builder, value, raw);
-        return TINYPY_TRUE;
+    case TINYPY_VALUE_LONG: {
+        tinypy_bool_t represented = __tinypy_representation_long(builder, value, raw, out_error);
+        return represented;
+    }
     case TINYPY_VALUE_FLOAT:
         __tinypy_representation_double(builder, TINYPY_FLOAT_OBJECT(value)->value, raw, TINYPY_TRUE);
         return TINYPY_TRUE;

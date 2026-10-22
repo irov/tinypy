@@ -55,14 +55,6 @@ static void __tinypy_exception_type_set_payload_size(tinypy_type_t *type, size_t
     type->slots_offset = type->basic_size;
 }
 //////////////////////////////////////////////////////////////////////////
-/* Lists the very entry source has under name, as the slot a static type
-   inherits from source. */
-static void __tinypy_exception_type_share_attribute(tinypy_type_t *type, const tinypy_type_t *source, tinypy_value_t *name) {
-    tinypy_value_t *attribute = tinypy_internal_type_lookup_key(type->vm, source, name);
-
-    tinypy_internal_type_set_attr_key(type, name, attribute);
-}
-//////////////////////////////////////////////////////////////////////////
 /* Builtin exception types are named "exceptions.<name>", as their tp_name in
    Python 2.7; __name__ and __module__ are the parts of that dotted name. */
 static void __tinypy_exception_type_qualify_name(tinypy_type_t *type, tinypy_value_t *module_name) {
@@ -1216,7 +1208,7 @@ void tinypy_internal_initialize_exceptions(tinypy_vm_t *vm) {
             spec.payload_size = sizeof(tinypy_internal_exception_payload_t);
             spec.has_instance_dict = TINYPY_TRUE;
             spec.has_weakrefs = TINYPY_FALSE;
-            type = tinypy_native_type_new_key(type_name, NULL, 0U, NULL, &spec, NULL);
+            type = tinypy_internal_native_type_new_key(type_name, NULL, 0U, NULL, &spec, NULL);
             type->release_references = __tinypy_exception_release_references;
             type->traverse_references = __tinypy_exception_release_references;
         }
@@ -1249,10 +1241,8 @@ void tinypy_internal_initialize_exceptions(tinypy_vm_t *vm) {
             __tinypy_exception_type_add_new(type);
             tinypy_internal_initialize_exception_descriptors(type);
             /* BaseException sets tp_getattro and tp_setattro to the generic
-               functions: the entries are object's own. */
-            __tinypy_exception_type_share_attribute(type, &vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_getattribute_key);
-            __tinypy_exception_type_share_attribute(type, &vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_setattr_key);
-            __tinypy_exception_type_share_attribute(type, &vm->types[TINYPY_VALUE_INSTANCE], vm->internal_special_delattr_key);
+               functions, whose wrappers it owns. */
+            tinypy_internal_type_add_object_attribute_methods(type);
             tinypy_internal_type_add_method(type, vm->internal_special_getitem_key, __tinypy_exception_getitem_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
             tinypy_internal_type_add_method(type, vm->internal_special_getslice_key, __tinypy_exception_getslice_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
             __tinypy_exception_type_add_str(type);
@@ -1494,6 +1484,7 @@ void tinypy_internal_exception_set_raised_type(tinypy_vm_t *vm, tinypy_value_t *
     vm->raised_type = type_value;
     vm->raised_value = value;
     vm->raised_traceback = traceback;
+    vm->raised_epoch += 1U;
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_exception_set_raised(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_value_t *traceback) {

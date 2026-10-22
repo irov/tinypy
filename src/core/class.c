@@ -956,7 +956,7 @@ static tinypy_value_t *__tinypy_classic_item_method(tinypy_value_t *function, ti
         result = contained >= 0 ? tinypy_bool_from_i32(vm, contained) : NULL;
         return result;
     }
-    /* instance_setattr takes a str name alone. */
+    /* instance_setattr and class_setattr take a str name alone. */
     if (name == vm->internal_special_setattr_key || name == vm->internal_special_delattr_key) {
         if (TINYPY_VALUE_KIND(key) != TINYPY_VALUE_STRING) {
             tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "attribute name must be a string", out_error);
@@ -1023,8 +1023,9 @@ static void __tinypy_classic_add_methods(tinypy_vm_t *vm) {
     tinypy_internal_initialize_classic_comparison_methods(vm);
 }
 //////////////////////////////////////////////////////////////////////////
-/* Classic classes expose class_repr, class_str and PyInstance_New; the
-   instance type exposes its protocol slots as native wrappers. */
+/* Classic classes expose class_repr, class_str, PyInstance_New and
+   class_setattr; the instance type exposes its protocol slots as native
+   wrappers. */
 void tinypy_internal_initialize_class_type(tinypy_vm_t *vm) {
     tinypy_type_t *type = &vm->types[TINYPY_VALUE_CLASS];
     tinypy_type_t *instance_type = &vm->types[TINYPY_VALUE_OLD_INSTANCE];
@@ -1037,6 +1038,8 @@ void tinypy_internal_initialize_class_type(tinypy_vm_t *vm) {
     tinypy_internal_type_add_method(type, vm->internal_special_repr_key, __tinypy_class_representation_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(type, vm->internal_special_str_key, __tinypy_class_representation_method, (void *)(intptr_t)1, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(type, vm->internal_special_call_key, __tinypy_class_call_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
+    tinypy_internal_type_add_method(type, vm->internal_special_setattr_key, __tinypy_classic_item_method, (void *)(uintptr_t)2U, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
+    tinypy_internal_type_add_method(type, vm->internal_special_delattr_key, __tinypy_classic_item_method, (void *)(uintptr_t)1U, NULL, TINYPY_NATIVE_DESCRIPTOR_WRAPPER);
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_class_name(const tinypy_value_t *class_value) {

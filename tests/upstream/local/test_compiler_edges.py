@@ -167,6 +167,57 @@ class CompilerEdges(unittest.TestCase):
         finally:
             _codecs.register_error('strict', previous)
 
+    def test_invalid_utf8_unicode_literal_handler_positions_and_replacements(self):
+        # decode_utf8 calls the handler for each invalid sequence of a run
+        # and decodes on from the position it returns; each character of a
+        # replacement becomes one of the literal, then the escape decoder
+        # calls the handler for an escape after the run. A source without a
+        # cookie or with a Latin-1 one keeps its bytes.
+        previous = _codecs.lookup_error('strict')
+        events = []
+        replies = []
+        def handler(error):
+            events.append((error.reason, error.start, error.end, error.object))
+            replacement, position = replies.pop(0)
+            return replacement, error.end if position is None else position
+        pad = ' ' * 100
+        invalid = 'invalid start byte'
+        cases = [("u'\xffa\xfe\xfdb\xc3\xa9\xfc'", [(u'1', None), (u'2', None), (u'3', None), (u'4', None)], u'1a23b\xe94',
+                  [(invalid, 0, 1, '\xff'), (invalid, 0, 1, '\xfe\xfd'), (invalid, 1, 2, '\xfe\xfd'), (invalid, 2, 3, '\xc3\xa9\xfc')]),
+                 ("u'\xff" + pad + "'", [(u'L' * 40, None)], u'L' * 40 + pad, [(invalid, 0, 1, '\xff')]),
+                 ("u'\xff" + pad + "'", [(u'', None)], unicode(pad), [(invalid, 0, 1, '\xff')]),
+                 ("ur'\xff" + pad + "'", [(u'\U0001f600' * 30, None)], u'\U0001f600' * 30 + pad, [(invalid, 0, 1, '\xff')]),
+                 ("u'\xff" + pad + "'", [(u'\ud83d\\x41\\', None)], u'\ud83d\\x41\\' + pad, [(invalid, 0, 1, '\xff')]),
+                 ("ur'\\\xff" + pad + "'", [(u'\\u0041', None)], u'\\\\u0041' + pad, [(invalid, 0, 1, '\xff')]),
+                 ("u'a\xff\xfe\xfdb'", [(u'F', 2), (u'?', None)], u'aF?b', [(invalid, 0, 1, '\xff\xfe\xfd'), (invalid, 2, 3, '\xff\xfe\xfd')]),
+                 ("u'a\xff\xfe\xfdb'", [(u'B', 0), (u'C', 3)], u'aBCb', [(invalid, 0, 1, '\xff\xfe\xfd'), (invalid, 0, 1, '\xff\xfe\xfd')]),
+                 ("u'a\xc3\xa9\xff\xc3\xa9b'", [(u'<>', 1), (u'!', 3)], u'a\xe9<>!\xe9b', [(invalid, 2, 3, '\xc3\xa9\xff\xc3\xa9'), (invalid, 1, 2, '\xc3\xa9\xff\xc3\xa9')]),
+                 ("u'a\xc3\xa9\xff\xc3\xa9b'", [(u'<>', 5)], u'a\xe9<>b', [(invalid, 2, 3, '\xc3\xa9\xff\xc3\xa9')]),
+                 ("u'a\xff\xfe'", [(u'x', -1), (u'?', None)], u'ax?', [(invalid, 0, 1, '\xff\xfe'), (invalid, 1, 2, '\xff\xfe')]),
+                 ("u'\xff' u'\xfe' 'c' ur'\\\xfd'", [(u'1', None), (u'2', None), (u'3', None)], u'12c\\3', [(invalid, 0, 1, '\xff'), (invalid, 0, 1, '\xfe'), (invalid, 0, 1, '\xfd')]),
+                 ("u'\xff\\x4g" + pad + "'", [(u'R' * 30, None), (u'E' * 300, None)], u'R' * 30 + u'E' * 300 + u'g' + pad,
+                  [(invalid, 0, 1, '\xff'), ('truncated \\xXX escape', 300, 303, '\\U00000052' * 30 + '\\x4g' + pad)])]
+        try:
+            _codecs.register_error('strict', handler)
+            for source, reply_list, value, trace in cases:
+                events[:] = []
+                replies[:] = reply_list
+                namespace = {}
+                exec compile('# coding: utf-8\nvalue = ' + source + '\n', '<literal>', 'exec') in namespace
+                self.assertEqual((namespace['value'], events, replies), (value, trace, []))
+            for run in (lambda source: eval(compile(source, '<literal>', 'eval')), eval):
+                events[:] = []
+                replies[:] = [(u'\U0001f600', None)]
+                self.assertEqual(run("# coding: utf-8\nu'a\xffb'\n"), u'a\U0001f600b')
+                self.assertEqual(events, [(invalid, 0, 1, '\xff')])
+            for cookie in ('', '# coding: latin-1\n'):
+                namespace = {}
+                exec cookie + "value = u'a\xff\xfeb' ur'\\\xfd'\n" in namespace
+                self.assertEqual(namespace['value'], u'a\xff\xfeb\\\xfd')
+            self.assertEqual(events, [(invalid, 0, 1, '\xff')])
+        finally:
+            _codecs.register_error('strict', previous)
+
     def test_codec_cookie_source_tokenizes_decoded_text(self):
         # translate_into_utf8 decodes the whole string with the strict
         # handler; the tokenizer reads the text the replacements make.

@@ -1484,6 +1484,289 @@ TINYPY_NATIVE_BINARY_WRAPPER(reflected_divide)
 
 #undef TINYPY_NATIVE_BINARY_WRAPPER
 //////////////////////////////////////////////////////////////////////////
+/* The calling conventions of the slot wrappers of a host native type, as
+   the wrapper functions of add_operators: those taking no argument after
+   self, then one, then two, then any. */
+typedef enum tinypy_native_wrapper_kind_e {
+    TINYPY_NATIVE_WRAPPER_UNARY = 0,
+    TINYPY_NATIVE_WRAPPER_NEXT = 1,
+    TINYPY_NATIVE_WRAPPER_HASH = 2,
+    TINYPY_NATIVE_WRAPPER_LENGTH = 3,
+    TINYPY_NATIVE_WRAPPER_NUMBER = 4,
+    TINYPY_NATIVE_WRAPPER_GET_ITEM = 5,
+    TINYPY_NATIVE_WRAPPER_DELETE_ITEM = 6,
+    TINYPY_NATIVE_WRAPPER_CONTAINS = 7,
+    TINYPY_NATIVE_WRAPPER_COMPARE = 8,
+    TINYPY_NATIVE_WRAPPER_GET_ATTRIBUTE = 9,
+    TINYPY_NATIVE_WRAPPER_DELETE_ATTRIBUTE = 10,
+    TINYPY_NATIVE_WRAPPER_SET_ITEM = 11,
+    TINYPY_NATIVE_WRAPPER_SET_ATTRIBUTE = 12,
+    TINYPY_NATIVE_WRAPPER_CALL = 13
+} tinypy_native_wrapper_kind_e;
+//////////////////////////////////////////////////////////////////////////
+typedef struct tinypy_native_slot_wrapper_t {
+    size_t name_offset;
+    size_t callback_offset;
+    tinypy_native_wrapper_kind_e kind;
+    tinypy_compare_operation_e operation;
+} tinypy_native_slot_wrapper_t;
+//////////////////////////////////////////////////////////////////////////
+/* The slot wrappers of the callbacks of a spec in the order of the slots of
+   add_operators, in which the first wrapper of a name wins: the mapping
+   callbacks shadow the sequence ones. */
+static const tinypy_native_slot_wrapper_t __tinypy_native_slot_wrappers[] = {
+    {offsetof(tinypy_vm_t, internal_special_repr_key), offsetof(tinypy_native_type_spec_t, repr), TINYPY_NATIVE_WRAPPER_UNARY, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_hash_key), offsetof(tinypy_native_type_spec_t, hash), TINYPY_NATIVE_WRAPPER_HASH, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_call_key), offsetof(tinypy_native_type_spec_t, call), TINYPY_NATIVE_WRAPPER_CALL, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_getattribute_key), offsetof(tinypy_native_type_spec_t, get_attribute), TINYPY_NATIVE_WRAPPER_GET_ATTRIBUTE, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_setattr_key), offsetof(tinypy_native_type_spec_t, set_attribute), TINYPY_NATIVE_WRAPPER_SET_ATTRIBUTE, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_delattr_key), offsetof(tinypy_native_type_spec_t, set_attribute), TINYPY_NATIVE_WRAPPER_DELETE_ATTRIBUTE, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_lt_key), offsetof(tinypy_native_type_spec_t, compare), TINYPY_NATIVE_WRAPPER_COMPARE, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_le_key), offsetof(tinypy_native_type_spec_t, compare), TINYPY_NATIVE_WRAPPER_COMPARE, TINYPY_COMPARE_LESS_EQUAL},
+    {offsetof(tinypy_vm_t, internal_special_eq_key), offsetof(tinypy_native_type_spec_t, compare), TINYPY_NATIVE_WRAPPER_COMPARE, TINYPY_COMPARE_EQUAL},
+    {offsetof(tinypy_vm_t, internal_special_ne_key), offsetof(tinypy_native_type_spec_t, compare), TINYPY_NATIVE_WRAPPER_COMPARE, TINYPY_COMPARE_NOT_EQUAL},
+    {offsetof(tinypy_vm_t, internal_special_gt_key), offsetof(tinypy_native_type_spec_t, compare), TINYPY_NATIVE_WRAPPER_COMPARE, TINYPY_COMPARE_GREATER},
+    {offsetof(tinypy_vm_t, internal_special_ge_key), offsetof(tinypy_native_type_spec_t, compare), TINYPY_NATIVE_WRAPPER_COMPARE, TINYPY_COMPARE_GREATER_EQUAL},
+    {offsetof(tinypy_vm_t, internal_special_iter_key), offsetof(tinypy_native_type_spec_t, iter), TINYPY_NATIVE_WRAPPER_UNARY, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_next_key), offsetof(tinypy_native_type_spec_t, next), TINYPY_NATIVE_WRAPPER_NEXT, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_add_key), offsetof(tinypy_native_type_spec_t, add), TINYPY_NATIVE_WRAPPER_NUMBER, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_radd_key), offsetof(tinypy_native_type_spec_t, reflected_add), TINYPY_NATIVE_WRAPPER_NUMBER, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_sub_key), offsetof(tinypy_native_type_spec_t, subtract), TINYPY_NATIVE_WRAPPER_NUMBER, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_rsub_key), offsetof(tinypy_native_type_spec_t, reflected_subtract), TINYPY_NATIVE_WRAPPER_NUMBER, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_mul_key), offsetof(tinypy_native_type_spec_t, multiply), TINYPY_NATIVE_WRAPPER_NUMBER, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_rmul_key), offsetof(tinypy_native_type_spec_t, reflected_multiply), TINYPY_NATIVE_WRAPPER_NUMBER, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_div_key), offsetof(tinypy_native_type_spec_t, divide), TINYPY_NATIVE_WRAPPER_NUMBER, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_rdiv_key), offsetof(tinypy_native_type_spec_t, reflected_divide), TINYPY_NATIVE_WRAPPER_NUMBER, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_neg_key), offsetof(tinypy_native_type_spec_t, negative), TINYPY_NATIVE_WRAPPER_UNARY, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_abs_key), offsetof(tinypy_native_type_spec_t, absolute), TINYPY_NATIVE_WRAPPER_UNARY, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_iadd_key), offsetof(tinypy_native_type_spec_t, inplace_add), TINYPY_NATIVE_WRAPPER_NUMBER, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_isub_key), offsetof(tinypy_native_type_spec_t, inplace_subtract), TINYPY_NATIVE_WRAPPER_NUMBER, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_imul_key), offsetof(tinypy_native_type_spec_t, inplace_multiply), TINYPY_NATIVE_WRAPPER_NUMBER, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_idiv_key), offsetof(tinypy_native_type_spec_t, inplace_divide), TINYPY_NATIVE_WRAPPER_NUMBER, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_length_key), offsetof(tinypy_native_type_spec_t, mapping_length), TINYPY_NATIVE_WRAPPER_LENGTH, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_getitem_key), offsetof(tinypy_native_type_spec_t, mapping_get), TINYPY_NATIVE_WRAPPER_GET_ITEM, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_setitem_key), offsetof(tinypy_native_type_spec_t, mapping_set), TINYPY_NATIVE_WRAPPER_SET_ITEM, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_delitem_key), offsetof(tinypy_native_type_spec_t, mapping_set), TINYPY_NATIVE_WRAPPER_DELETE_ITEM, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_length_key), offsetof(tinypy_native_type_spec_t, sequence_length), TINYPY_NATIVE_WRAPPER_LENGTH, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_getitem_key), offsetof(tinypy_native_type_spec_t, sequence_get), TINYPY_NATIVE_WRAPPER_GET_ITEM, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_setitem_key), offsetof(tinypy_native_type_spec_t, sequence_set), TINYPY_NATIVE_WRAPPER_SET_ITEM, TINYPY_COMPARE_LESS},
+    {offsetof(tinypy_vm_t, internal_special_contains_key), offsetof(tinypy_native_type_spec_t, contains), TINYPY_NATIVE_WRAPPER_CONTAINS, TINYPY_COMPARE_LESS},
+};
+//////////////////////////////////////////////////////////////////////////
+/* Whether the spec sets the callback of a slot wrapper. */
+static tinypy_bool_t __tinypy_internal_native_wrapper_callback_set(const tinypy_native_type_spec_t *spec, const tinypy_native_slot_wrapper_t *wrapper) {
+    const uint8_t *field = (const uint8_t *)spec + wrapper->callback_offset;
+
+    switch (wrapper->kind) {
+    case TINYPY_NATIVE_WRAPPER_UNARY:
+    case TINYPY_NATIVE_WRAPPER_NEXT:
+        return *(const tinypy_native_unary_t *)field != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    case TINYPY_NATIVE_WRAPPER_HASH:
+        return *(const tinypy_native_hash_t *)field != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    case TINYPY_NATIVE_WRAPPER_LENGTH:
+        return *(const tinypy_native_length_t *)field != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    case TINYPY_NATIVE_WRAPPER_NUMBER:
+    case TINYPY_NATIVE_WRAPPER_GET_ITEM:
+    case TINYPY_NATIVE_WRAPPER_GET_ATTRIBUTE:
+        return *(const tinypy_native_binary_t *)field != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    case TINYPY_NATIVE_WRAPPER_CONTAINS:
+        return *(const tinypy_native_contains_t *)field != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    case TINYPY_NATIVE_WRAPPER_COMPARE:
+        return *(const tinypy_native_compare_t *)field != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    case TINYPY_NATIVE_WRAPPER_CALL:
+        return *(const tinypy_native_call_t *)field != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    default:
+        return *(const tinypy_native_set_item_t *)field != NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* The callbacks of the attribute wrappers take a str name, as the slots
+   do: PyObject_GetAttr and PyObject_SetAttr encode a unicode one. */
+static tinypy_value_t *__tinypy_internal_native_wrapper_name(tinypy_value_t *name, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(name);
+
+    if (__tinypy_internal_object_check_attribute_name(vm, name, out_error) == TINYPY_FALSE) {
+        return NULL;
+    }
+    if (TINYPY_VALUE_KIND(name) == TINYPY_VALUE_UNICODE) {
+        tinypy_value_t *encoded = tinypy_internal_object_encode_attribute_name(name, out_error);
+        return encoded;
+    }
+    return TINYPY_RET(name);
+}
+//////////////////////////////////////////////////////////////////////////
+/* Runs the callback that the spec of the type publishing a slot wrapper
+   holds, as the slot wrapper of a C type runs the slot function of that
+   type, on the payload of self, whose liveness the call of the descriptor
+   checks. A callback that tinypy_native_type_update_spec removed fails as
+   its slot does. */
+tinypy_value_t *tinypy_internal_native_slot_wrapper_call(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    const tinypy_native_function_object_t *source = __tinypy_native_function_source(function);
+    const tinypy_native_slot_wrapper_t *wrapper = &__tinypy_native_slot_wrappers[(uintptr_t)source->user_data];
+    tinypy_type_t *owner = tinypy_internal_native_function_owner(&source->base);
+
+    if (owner == NULL || __tinypy_internal_native_wrapper_callback_set(&owner->native_spec, wrapper) == TINYPY_FALSE) {
+        if (wrapper->kind == TINYPY_NATIVE_WRAPPER_NUMBER || wrapper->kind == TINYPY_NATIVE_WRAPPER_COMPARE) {
+            return TINYPY_RET_NOT_IMPLEMENTED(vm);
+        }
+        __tinypy_internal_native_slot_removed(self, out_error);
+        return NULL;
+    }
+    const tinypy_native_type_spec_t *spec = &owner->native_spec;
+    const uint8_t *field = (const uint8_t *)spec + wrapper->callback_offset;
+    void *native_payload = __tinypy_internal_native_payload(self);
+    tinypy_value_t *previous_raised = vm->raised_value;
+
+    switch (wrapper->kind) {
+    case TINYPY_NATIVE_WRAPPER_UNARY:
+    case TINYPY_NATIVE_WRAPPER_NEXT: {
+        tinypy_value_t *result = (*(const tinypy_native_unary_t *)field)(self, native_payload, spec->user_data, out_error);
+
+        /* wrap_next: an exhausted iterator raises StopIteration. */
+        if (result == NULL && wrapper->kind == TINYPY_NATIVE_WRAPPER_NEXT && vm->raised_value == previous_raised && (out_error == NULL || *out_error == NULL)) {
+            tinypy_internal_exception_raise_stop_iteration(vm, out_error);
+        }
+        return result;
+    }
+    case TINYPY_NATIVE_WRAPPER_HASH: {
+        tinypy_hash_t hash = (*(const tinypy_native_hash_t *)field)(self, native_payload, spec->user_data, out_error);
+
+        if (vm->raised_value != previous_raised || (out_error != NULL && *out_error != NULL)) {
+            return NULL;
+        }
+        tinypy_value_t *result = tinypy_integer_from_i64(vm, (int64_t)(hash == (tinypy_hash_t)-1 ? (tinypy_hash_t)-2 : hash));
+        return result;
+    }
+    case TINYPY_NATIVE_WRAPPER_LENGTH: {
+        ptrdiff_t length = (*(const tinypy_native_length_t *)field)(self, native_payload, spec->user_data, out_error);
+        tinypy_value_t *result = length >= 0 ? tinypy_integer_from_i64(vm, (int64_t)length) : NULL;
+        return result;
+    }
+    case TINYPY_NATIVE_WRAPPER_NUMBER:
+    case TINYPY_NATIVE_WRAPPER_GET_ITEM: {
+        tinypy_value_t *result = (*(const tinypy_native_binary_t *)field)(self, native_payload, items[0], spec->user_data, out_error);
+        return result;
+    }
+    case TINYPY_NATIVE_WRAPPER_CONTAINS: {
+        int32_t contains = (*(const tinypy_native_contains_t *)field)(self, native_payload, items[0], spec->user_data, out_error);
+        tinypy_value_t *result = contains >= 0 ? tinypy_bool_from_i32(vm, contains) : NULL;
+        return result;
+    }
+    case TINYPY_NATIVE_WRAPPER_COMPARE: {
+        tinypy_value_t *result = (*(const tinypy_native_compare_t *)field)(self, native_payload, items[0], wrapper->operation, spec->user_data, out_error);
+        return result;
+    }
+    case TINYPY_NATIVE_WRAPPER_CALL: {
+        tinypy_value_t *args = tinypy_internal_tuple_from_items_checked(vm, items, count, out_error);
+        if (args == NULL) {
+            return NULL;
+        }
+        tinypy_value_t *result = (*(const tinypy_native_call_t *)field)(self, native_payload, args, kwargs, spec->user_data, out_error);
+        TINYPY_DECREF(args);
+        return result;
+    }
+    case TINYPY_NATIVE_WRAPPER_DELETE_ITEM:
+    case TINYPY_NATIVE_WRAPPER_SET_ITEM: {
+        tinypy_value_t *value = wrapper->kind == TINYPY_NATIVE_WRAPPER_SET_ITEM ? items[1] : NULL;
+        tinypy_bool_t stored = (*(const tinypy_native_set_item_t *)field)(self, native_payload, items[0], value, spec->user_data, out_error);
+        tinypy_value_t *result = stored != TINYPY_FALSE ? TINYPY_RET_NONE(vm) : NULL;
+        return result;
+    }
+    default:
+        break;
+    }
+    tinypy_value_t *name = __tinypy_internal_native_wrapper_name(items[0], out_error);
+    if (name == NULL) {
+        return NULL;
+    }
+    tinypy_value_t *result = NULL;
+    if (wrapper->kind == TINYPY_NATIVE_WRAPPER_GET_ATTRIBUTE) {
+        result = (*(const tinypy_native_get_attribute_t *)field)(self, native_payload, name, spec->user_data, out_error);
+    }
+    else {
+        tinypy_value_t *value = wrapper->kind == TINYPY_NATIVE_WRAPPER_SET_ATTRIBUTE ? items[1] : NULL;
+        tinypy_bool_t stored = (*(const tinypy_native_set_attribute_t *)field)(self, native_payload, name, value, spec->user_data, out_error);
+
+        result = stored != TINYPY_FALSE ? TINYPY_RET_NONE(vm) : NULL;
+    }
+    TINYPY_DECREF(name);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The nearest base of a host native type that is no host native type. */
+static const tinypy_type_t *__tinypy_internal_native_generic_base(const tinypy_type_t *type) {
+    const tinypy_type_t *generic = type->base_type;
+
+    while (tinypy_internal_type_is_host_native(generic) != 0) {
+        generic = generic->base_type;
+    }
+    return generic;
+}
+//////////////////////////////////////////////////////////////////////////
+TINYPY_NOINLINE tinypy_value_t *tinypy_internal_native_slot_wrapper_special(tinypy_value_t *attribute, tinypy_value_t *value, tinypy_value_t *key) {
+    if (__tinypy_native_function_applies(attribute, value) == 0) {
+        return attribute;
+    }
+    tinypy_type_t *owner = tinypy_internal_native_function_owner(attribute);
+    const tinypy_type_t *generic = __tinypy_internal_native_generic_base(owner);
+    tinypy_value_t *generic_attribute = tinypy_internal_type_lookup_key(owner->vm, generic, key);
+    return generic_attribute;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The index of the slot wrapper that the type published as attribute, or
+   the count of the slot wrappers for any other attribute. */
+static size_t __tinypy_internal_native_published_wrapper(tinypy_type_t *type, tinypy_value_t *attribute) {
+    size_t wrapper_count = sizeof(__tinypy_native_slot_wrappers) / sizeof(__tinypy_native_slot_wrappers[0]);
+
+    if (attribute->type != type->vm->native_wrapper_descriptor_type || TINYPY_NATIVE_FUNCTION_OBJECT(attribute)->items_callback != tinypy_internal_native_slot_wrapper_call || tinypy_internal_native_function_owner(attribute) != type) {
+        return wrapper_count;
+    }
+    size_t index = (size_t)(uintptr_t)TINYPY_NATIVE_FUNCTION_OBJECT(attribute)->user_data;
+    return index;
+}
+//////////////////////////////////////////////////////////////////////////
+/* add_operators: the type publishes a slot wrapper for each callback of its
+   spec, under a name that its dictionary does not define otherwise, and
+   withdraws those of the callbacks its spec no longer sets. */
+static void __tinypy_internal_native_publish_wrappers(tinypy_type_t *type) {
+    tinypy_vm_t *vm = type->vm;
+    size_t wrapper_count = sizeof(__tinypy_native_slot_wrappers) / sizeof(__tinypy_native_slot_wrappers[0]);
+
+    for (size_t index = 0U; index < wrapper_count; ++index) {
+        const tinypy_native_slot_wrapper_t *wrapper = &__tinypy_native_slot_wrappers[index];
+        tinypy_value_t *name = *(tinypy_value_t **)((uint8_t *)vm + wrapper->name_offset);
+        tinypy_value_t *existing = tinypy_dict_get_optional(type->dict, name);
+        size_t published = existing != NULL ? __tinypy_internal_native_published_wrapper(type, existing) : wrapper_count;
+
+        if (existing != NULL && published == wrapper_count) {
+            continue;
+        }
+        tinypy_bool_t wanted = __tinypy_internal_native_wrapper_callback_set(&type->native_spec, wrapper);
+        for (size_t shadow = 0U; shadow < index && wanted != TINYPY_FALSE; ++shadow) {
+            const tinypy_native_slot_wrapper_t *shadowing = &__tinypy_native_slot_wrappers[shadow];
+
+            if (shadowing->name_offset == wrapper->name_offset && __tinypy_internal_native_wrapper_callback_set(&type->native_spec, shadowing) != TINYPY_FALSE) {
+                wanted = TINYPY_FALSE;
+            }
+        }
+        if (wanted != TINYPY_FALSE && published != index) {
+            size_t arguments = wrapper->kind < TINYPY_NATIVE_WRAPPER_NUMBER ? 0U : (wrapper->kind < TINYPY_NATIVE_WRAPPER_SET_ITEM ? 1U : 2U);
+            tinypy_arity_style_e style = arguments == 2U ? TINYPY_ARITY_STYLE_UNPACK : TINYPY_ARITY_STYLE_WRAPPER;
+
+            if (wrapper->kind == TINYPY_NATIVE_WRAPPER_CALL) {
+                tinypy_internal_type_add_items_method(type, name, tinypy_internal_native_slot_wrapper_call, (void *)(uintptr_t)index, 0U, SIZE_MAX, TINYPY_ARITY_STYLE_UNCHECKED);
+            }
+            else {
+                tinypy_internal_type_add_items_method(type, name, tinypy_internal_native_slot_wrapper_call, (void *)(uintptr_t)index, arguments, arguments, style);
+            }
+        }
+        else if (wanted == TINYPY_FALSE && published == index) {
+            tinypy_dict_delete(type->dict, name);
+        }
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_native_type_spec_init(tinypy_native_type_spec_t *spec) {
     (void)memset(spec, 0, sizeof(*spec));
     spec->abi_version = TINYPY_NATIVE_TYPE_ABI_VERSION;
@@ -1511,11 +1794,8 @@ static void __tinypy_internal_native_spec_copy(tinypy_native_type_spec_t *target
    on the user data of the subtype's spec. */
 static void __tinypy_internal_native_configure_slots(tinypy_type_t *type) {
     tinypy_native_type_spec_t *spec = &type->native_spec;
-    const tinypy_type_t *generic = type->base_type;
+    const tinypy_type_t *generic = __tinypy_internal_native_generic_base(type);
 
-    while (tinypy_internal_type_is_host_native(generic) != 0) {
-        generic = generic->base_type;
-    }
     (void)memset(&type->native_number_slots, 0, sizeof(type->native_number_slots));
     (void)memset(&type->native_sequence_slots, 0, sizeof(type->native_sequence_slots));
     (void)memset(&type->native_mapping_slots, 0, sizeof(type->native_mapping_slots));
@@ -1583,6 +1863,18 @@ tinypy_type_t *tinypy_native_type_new(tinypy_vm_t *vm, const char *name, size_t 
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_type_t *tinypy_native_type_new_key(tinypy_value_t *name, const tinypy_type_t *const *bases, size_t base_count, tinypy_value_t *namespace_dict, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error) {
+    tinypy_type_t *type = tinypy_internal_native_type_new_key(name, bases, base_count, namespace_dict, spec, out_error);
+
+    if (type == NULL) {
+        return NULL;
+    }
+    __tinypy_internal_native_publish_wrappers(type);
+    return type;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A host native type without its slot wrappers, for the built-in types of
+   that layout, which register their own. */
+tinypy_type_t *tinypy_internal_native_type_new_key(tinypy_value_t *name, const tinypy_type_t *const *bases, size_t base_count, tinypy_value_t *namespace_dict, const tinypy_native_type_spec_t *spec, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(name);
     size_t basic_size;
 
@@ -1662,6 +1954,7 @@ tinypy_bool_t tinypy_native_type_update_spec(tinypy_type_t *type, const tinypy_n
     }
     type->native_spec = native_spec;
     __tinypy_internal_native_configure_slots(type);
+    __tinypy_internal_native_publish_wrappers(type);
     tinypy_internal_type_modified(type);
     return TINYPY_TRUE;
 }

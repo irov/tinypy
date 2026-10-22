@@ -43,7 +43,7 @@ exception state, callback order and zero outstanding allocations.
 | --- | --- |
 | Bytearray | Extension obtains the iterator before reading a source hint; negative length versus hint errors and bound/unbound diagnostics remain distinct. Constructors/reinit fall back to iteration only after index TypeError. Byte-string encoding still invokes the codec and retains its temporary while copying the original bytes. Append/insert use the entry length before conversion callbacks, checked by defined growth witnesses. |
 | Unicode translation | Deleted runs look ahead and recheck the first retained character. Discarded lookup values are validated and released before retry; second results, lookup failures, mapping mutation and prior handled exceptions remain observable. |
-| Codec handlers | Ignore and decode replacement consume the clamped end without reading start. Wrong-type errors read reported class/name and str, including callbacks, NUL/truncation and user failures. Hex codecs compare errors to strict before source conversion and raise an empty-args AssertionError when false. In the seventh pass `strict` raises a classic instance, which `PyExceptionInstance_Check` accepts, and the UnicodeError of a str or unicode subclass instance holds the exact text the codec read. In the twelfth pass compile() calls the strict handler wherever Python 2's compiler decodes: the escape decoders of a unicode literal share one exception per literal and go on at the returned position, an invalid UTF-8 run of a literal takes the replacement as escapes, a string or file whose cookie names a codec without a fast path tokenizes the decoded text and an ASCII cookie encodes byte literals back strictly; only a UnicodeError becomes the `(unicode error)` SyntaxError, and one whose str() fails reads `unknown error` or `unknown decode error`. Covered by `local.test_compiler_edges` and `local.test_compiler_diagnostics`. |
+| Codec handlers | Ignore and decode replacement consume the clamped end without reading start. Wrong-type errors read reported class/name and str, including callbacks, NUL/truncation and user failures. Hex codecs compare errors to strict before source conversion and raise an empty-args AssertionError when false. In the seventh pass `strict` raises a classic instance, which `PyExceptionInstance_Check` accepts, and the UnicodeError of a str or unicode subclass instance holds the exact text the codec read. In the twelfth pass compile() calls the strict handler wherever Python 2's compiler decodes: the escape decoders of a unicode literal share one exception per literal and go on at the returned position, an invalid UTF-8 run of a literal takes the replacement as escapes, a string or file whose cookie names a codec without a fast path tokenizes the decoded text and an ASCII cookie encodes byte literals back strictly; only a UnicodeError becomes the `(unicode error)` SyntaxError, and one whose str() fails reads `unknown error` or `unknown decode error`. Covered by `local.test_compiler_edges` and `local.test_compiler_diagnostics`. In the thirteenth pass a literal decodes into room sized by its prepared escapes, so the replacement of an invalid UTF-8 run decodes whole however much longer than the literal it is, where CPython 2.7 writes its escapes past a buffer sized by the literal; covered by `cli_runtime_exception_codec_runtime`. |
 | Descriptors | Direct get/set/delete/repr methods reuse canonical native argument styles and receiver diagnostics. Omitted/None method owners remain None; classic/new-style rebinding and metaclass subclass checks preserve identity and errors. Instance/subclass consumers reuse one existing algorithm through a single internal helper. |
 
 The frozen inventory contains 52 project-authored modules with 1,594 cases plus
@@ -100,6 +100,19 @@ releases a losing candidate before its key without returning the key. A list
 subclass extending itself collects its own iterator as `PySequence_Fast` does:
 a missing iterator reads "argument must be iterable" and the length hint comes
 from that iterator.
+
+In the thirteenth pass the error of a length hint that `map` keeps pending, as
+`builtin_map` leaves it the current exception, is gone once any later exception
+is raised or an optional attribute lookup misses (getattr with a default,
+hasattr, the keys probe), and an iterator ending normally clears a pending
+StopIteration as `PyIter_Next` does. `dict(x)`, `update` and `dict.__init__`
+probe `keys` on every argument but an exact dict before `PyDict_Merge` takes a
+dict subclass directly; copies, class namespaces and partial keywords merge
+without the probe. The `__cmp__` wrappers of dict, int and long order their
+operands with their own slot rather than the rich comparisons, slice's orders
+the fields with `PyObject_Cmp`, and the wrappers of these types and of set,
+dictproxy, cell and code take only an operand whose type shares the slot or
+derives from the receiver's type, as `wrap_cmpfunc` does.
 
 ASCII and UTF-8 decoding consult registered handlers for every policy name,
 including default strict. ASCII/Latin-1 encoding retains its four builtin
@@ -232,8 +245,13 @@ through the protocols `copy_reg.py` uses, without type checks of their own:
 `_reduce_ex` asserts `proto < 2`, `__newobj__`, `_reconstructor`,
 `pickle_complex` and `_slotnames` take any object and read its attributes, and
 `add_extension` converts the code with `int()`, compares registrations with
-`==` and `!=` and reports conflicts with the messages of `copy_reg.py`. The
-source oracle is CPython 2.7.18
+`==` and `!=` and reports conflicts with the messages of `copy_reg.py`. In the
+thirteenth pass `pickle` and `constructor` test `hasattr(obj, '__call__')`,
+`pickle` registers the reducer before it calls the module's `constructor`,
+`_reduce_ex` reads `_HEAPTYPE` and, after the truth test of the state,
+`_reconstructor` as globals, and protocol 2 refuses type objects, which are
+variable-sized in CPython, and skips slot names that are not strings before
+any hook. The source oracle is CPython 2.7.18
 [`typeobject.c`](https://github.com/python/cpython/blob/v2.7.18/Objects/typeobject.c)
 and [`copy_reg.py`](https://github.com/python/cpython/blob/v2.7.18/Lib/copy_reg.py).
 
@@ -271,7 +289,7 @@ ownership, parser order and exception-state paths.
 | Text arguments | Shared native argument styles preserve receiver/count/keyword errors. Unicode padding converts character buffers, validates one character and retains width-before-fill order; byte padding accepts one byte only. Subtype center preserves separately clamped signed margins. Join translates only iterator-acquisition TypeError, while iteration and other callback errors retain identity. Private formatter spans preserve fresh result identity. |
 | Codec arguments | Guaranteed encoder/decoder entries preserve nullable errors, typed/NUL name diagnostics, builtin handler metadata and source/error parser priority. Parsed registry names use exact string keys without subtype hash/equality hooks. Encoders consume character-buffer views; decoders retain raw bytes. The product observes the existing guaranteed codec entries and does not claim standard-library stream reader/writer classes. |
 | Native readiness | Cold/warm metadata errors track first safe attribute access and remain shared by instances of the actual type. Native C descriptor metadata and numeric real/imag/numerator/denominator fields use physical member/getset descriptors, canonical values, receiver validation and readonly error priority. In the eleventh pass `object.__class__`, the members of `slice` and the softspace of the output streams are such descriptors too, read without the recursion level of a property getter's call. In the twelfth pass the softspace keeps the int assigned to it, as the `f_softspace` member of a file does. |
-| Weakrefs | Constructor/new/init/call/module parsers preserve class/referent/keyword/count priority. Basic-reference/proxy caches retain list/callback order across callability changes. Repr and Unicode proxy dispatch preserve reference lookup behavior; dead-reference deletion performs one lookup and suppresses only KeyError. Function/method/generator/set weakref slots, generator callback-before-finally order and exact empty-frozenset identity retain lifetime semantics. In the twelfth pass a proxy passes `__class__` and every other attribute through `proxy_getattr` and `proxy_setattr`, as the getset of `object.__class__` no longer answers before the hook of a proxy or a host native type; its `__getattribute__`, `__setattr__` and `__delattr__` wrappers check the name after the referent as `PyObject_GetAttr` and `PyObject_SetAttr` do; `__str__` and `__cmp__`, which takes proxies alone while other operands get the default ordering that counts a proxy as a number, wrap its own slots; abs, len and next of the referent follow the builtins; the slice wrappers read C long bounds; object's `__setattr__` and `__delattr__` refuse a proxy; and a classic instance whose `__getattr__` provides `__call__` gets a callable proxy. The proxy type still holds `__hash__ = None` where CPython inherits the wrapper of object, and its `__index__` gives an int for a bool result. Covered by `local.test_weakref_protocol_audit` and `core_native_attribute_hook_class`. |
+| Weakrefs | Constructor/new/init/call/module parsers preserve class/referent/keyword/count priority. Basic-reference/proxy caches retain list/callback order across callability changes. Repr and Unicode proxy dispatch preserve reference lookup behavior; dead-reference deletion performs one lookup and suppresses only KeyError. Function/method/generator/set weakref slots, generator callback-before-finally order and exact empty-frozenset identity retain lifetime semantics. In the twelfth pass a proxy passes `__class__` and every other attribute through `proxy_getattr` and `proxy_setattr`, as the getset of `object.__class__` no longer answers before the hook of a proxy or a host native type; its `__getattribute__`, `__setattr__` and `__delattr__` wrappers check the name after the referent as `PyObject_GetAttr` and `PyObject_SetAttr` do; `__str__` and `__cmp__`, which takes proxies alone while other operands get the default ordering that counts a proxy as a number, wrap its own slots; abs, len and next of the referent follow the builtins; the slice wrappers read C long bounds; object's `__setattr__` and `__delattr__` refuse a proxy; and a classic instance whose `__getattr__` provides `__call__` gets a callable proxy. The proxy type still holds `__hash__ = None` where CPython inherits the wrapper of object, and its `__index__` gives an int for a bool result. In the thirteenth pass `reversed()` refuses a proxy, which has no `sq_item`, and a simple slice of a proxy whose referent has neither the slice nor the subscript slot reports what `PySequence_GetSlice` and `PySequence_SetSlice` report. Covered by `local.test_weakref_protocol_audit` and `core_native_attribute_hook_class`. |
 
 The frozen inventory requires 49 project-authored modules with 1,538 cases plus
 210 selected vendor cases: 1,748 Debug/sanitize PASS, or 1,744 Release/LTO PASS
@@ -472,7 +490,7 @@ that evidence.
 | `_struct` offsets | Superseded by the deep audit: acquire and retain the buffer export before offset/numeric callbacks, matching CPython's resize blocking and observation of in-place changes; release it on every exit. Supported offset protocols and error ordering have oracle regressions. |
 | Overridden encode result; codec module mutation/search growth | Hardened: validate encode result types; retain a private VM codec registry; search with owned callbacks and live bounds. |
 | Negative buffer slice magnitude; Unicode expandtabs | Hardened/fixed: avoid signed negation overflow; account for removed tabs and avoid null-buffer arithmetic. |
-| Non-ASCII Unicode format specification | Fixed: require ASCII decoding before builtin format parsing; custom format methods retain their original specification. |
+| Non-ASCII Unicode format specification | Fixed: require ASCII decoding before builtin format parsing; custom format methods retain their original specification. In the thirteenth pass a str or unicode subclass specification reaches a builtin str, unicode or number as its `__format__` reads it: `unicode.__format__` through `PyObject_Unicode`, `str.__format__` through `PyObject_Str`, and a number's `__format__` a unicode specification through `PyObject_Str` and a str one as its bytes, which then format as a byte specification whose str result `format()` decodes for a unicode specification; such bytes never become the UTF-8 of a unicode object. Covered by `local.test_format_fields`. |
 | Reversed SRE group marks | Hardened: normalize a reversed captured span to empty and check group construction failures. Crafted SRE programs were not executed. |
 | `__cmp__` sign reversal | Fixed: normalize its result before negation. |
 | END_FINALLY / WITH_CLEANUP verifier disagreement | Fixed: the verifier tracks normal, exception, return, break and continue markers with their resume depths. Like CPython's stack depth computation it models every pending finally reason three values wide, and the reasons that enter one handler from one context share a marker, so nested finally clauses do not multiply the verifier's states. Normal cleanup requires a proven None constant. Consuming or rewriting the values of an except clause invalidates that proof; only END_FINALLY and WITH_CLEANUP consume a finally reason, code never reads or pops below the level of its block, to which an exception unwinds, and untyped cleanup paths are rejected. Redundant runtime depth/shape diagnostics compile only in Debug; structural verification remains active in Release. |
@@ -619,8 +637,12 @@ These are explicit scope decisions, rather than pending implementation items:
   judges by the built-in base, not by the slots an intermediate Python class
   left. Built-in types hold the wrappers of their own slots only, so a
   wrapper that CPython gives a type for an inherited `tp_getattro`, such as
-  `BaseException.__getattribute__`, is object's in tinypy and binds
-  anywhere. A `__new__` written in Python makes the `tp_new` of a class
+  `dictproxy.__getattribute__`, is object's in tinypy and binds anywhere.
+  Since the thirteenth pass BaseException owns the wrappers of its generic
+  `tp_getattro` and `tp_setattro`, which refuse other receivers; a slot
+  wrapper over the C function of the built-in base that applies to the value
+  overrides nothing, as `update_one_slot` keeps its `d_wrapped`. A
+  `__new__` written in Python makes the `tp_new` of a class
   `slot_tp_new`, which it and its subclasses keep after the method is
   removed. Since the eleventh pass the dictionary of a
   built-in type holds its `__new__` as a builtin function, as CPython holds

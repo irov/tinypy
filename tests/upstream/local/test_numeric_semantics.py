@@ -245,6 +245,18 @@ class NumericSemantics(unittest.TestCase):
             for difference in (3L - complex(value, value), complex(value, value).__rsub__(3), complex(3, 3) - complex(value, value)):
                 self.assertEqual((bits(difference.real), bits(difference.imag)), (expected, expected))
 
+    def test_complex_abs_takes_an_infinite_part_before_a_nan(self):
+        inf = float('inf')
+        signalling = _struct.unpack('>d', '7ff0000000000001'.decode('hex'))[0]
+        quiet = _struct.unpack('>d', 'fff8000000001234'.decode('hex'))[0]
+        for value in (complex(signalling, inf), complex(-inf, signalling), complex(quiet, -inf), complex(inf, quiet), complex(-inf, inf)):
+            self.assertEqual((abs(value), value.__abs__()), (inf, inf))
+        for value in (complex(signalling, 1.0), complex(0.0, quiet), complex(signalling, quiet)):
+            absolute = abs(value)
+            self.assertTrue(absolute != absolute)
+        self.assertEqual(abs(complex(3.0, -4.0)), 5.0)
+        self.assertEqual(_error(abs, complex(1.5e308, -1.5e308)), ('OverflowError', 'absolute value too large'))
+
     def test_integer_power_goes_on_from_the_step_that_overflows(self):
         class Small(int):
             pass

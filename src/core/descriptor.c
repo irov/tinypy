@@ -1545,14 +1545,15 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
 
             return result;
         }
+        /* type_set_module and type_set_abstractmethods report an error of a
+           key comparison of the dictionary. */
         if (field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_MODULE) {
-            tinypy_internal_type_set_attr_key(type, descriptor->name, value);
-            return TINYPY_TRUE;
+            tinypy_bool_t stored = tinypy_internal_dict_set_checked(vm, type->dict, descriptor->name, value, out_error);
+            return stored;
         }
         if (field == TINYPY_INTERNAL_C_DESCRIPTOR_TYPE_ABSTRACT_METHODS) {
             if (value == NULL) {
-                if (tinypy_internal_dict_delete_optional(vm, type->dict, descriptor->name) == 0) {
-                    tinypy_internal_make_vm_error(vm, TINYPY_ERROR_ATTRIBUTE, "__abstractmethods__", out_error);
+                if (tinypy_internal_object_delete_dict_attribute(vm, type->dict, descriptor->name, out_error) == 0) {
                     return TINYPY_FALSE;
                 }
                 type->flags &= ~TINYPY_TYPE_FLAG_ABSTRACT;
@@ -1562,7 +1563,9 @@ tinypy_bool_t tinypy_internal_c_descriptor_set(tinypy_value_t *descriptor_value,
             if (abstract < 0) {
                 return TINYPY_FALSE;
             }
-            tinypy_internal_type_set_attr_key(type, descriptor->name, value);
+            if (tinypy_internal_dict_set_checked(vm, type->dict, descriptor->name, value, out_error) == 0) {
+                return TINYPY_FALSE;
+            }
             if (abstract != 0) {
                 type->flags |= TINYPY_TYPE_FLAG_ABSTRACT;
             }
