@@ -64,6 +64,7 @@
   "core_allocator_accounting",
   "core_attribute_native_key_errors",
   "core_buffer_unicode_refusal",
+  "core_buffer_unsupported_owner",
   "core_build_profile_allocation_refusal",
   "core_build_value",
   "core_byte_strings",

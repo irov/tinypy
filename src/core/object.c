@@ -1198,12 +1198,18 @@ tinypy_bool_t tinypy_internal_object_has_special_override_key(tinypy_value_t *va
         const tinypy_type_t *base = tinypy_internal_array_check(value) != TINYPY_FALSE ? vm->array_type : &vm->types[TINYPY_VALUE_INSTANCE];
 
         builtin_attribute = tinypy_internal_type_lookup_key(vm, base, key);
-        /* A Python class that holds the attribute of object where its
-           host native static base finds another overrides the slot of
-           that name the base replaced with a callback of the spec the
-           class copied: update_one_slot makes it object's. */
-        if (attribute == builtin_attribute && (value->type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U && tinypy_internal_type_lookup_key(vm, tinypy_internal_type_static_base(value->type), key) != attribute && tinypy_internal_native_type_wraps_key(value->type, key) != 0) {
-            return TINYPY_TRUE;
+        /* A Python class that finds the attribute of object in a class
+           ahead of its host native static base overrides the slot of that
+           name that a callback of the spec the class copied fills:
+           update_one_slot makes it object's, whether or not an update has
+           removed that callback from the base since. */
+        if (attribute == builtin_attribute && (value->type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) != 0U && tinypy_internal_native_type_wraps_key(value->type, key) != 0) {
+            tinypy_value_t *held = tinypy_internal_type_lookup_before(vm, value->type, &tinypy_internal_type_static_base(value->type)->base.base, key);
+
+            if (held != NULL) {
+                TINYPY_DECREF(held);
+                return TINYPY_TRUE;
+            }
         }
     }
     if (attribute == builtin_attribute || __tinypy_object_wraps_same_slot(value, attribute, builtin_attribute) != 0) {
@@ -1226,7 +1232,9 @@ tinypy_value_t *tinypy_internal_dispatch_key(tinypy_vm_t *vm, tinypy_internal_di
 //////////////////////////////////////////////////////////////////////////
 /* The dispatch specials that update_one_slot resolves into one C slot
    together: both operands of a binary operator, the rich comparisons, item
-   assignment with deletion and attribute assignment with deletion. */
+   assignment with deletion and attribute assignment with deletion. The
+   names of sq_ass_slice, which are no dispatch specials, pair through
+   tinypy_internal_object_kept_slot_wrapper. */
 static const uint64_t __tinypy_object_dispatch_slots[] = {
     TINYPY_INTERNAL_DISPATCH_BIT(ADD) | TINYPY_INTERNAL_DISPATCH_BIT(RADD),
     TINYPY_INTERNAL_DISPATCH_BIT(SUB) | TINYPY_INTERNAL_DISPATCH_BIT(RSUB),
@@ -1251,10 +1259,10 @@ static const uint64_t __tinypy_object_dispatch_slots[] = {
    that update_one_slot fills from a slot wrapper alone. */
 static const uint64_t __tinypy_object_sequence_specials = TINYPY_INTERNAL_DISPATCH_BIT(ADD) | TINYPY_INTERNAL_DISPATCH_BIT(MUL) | TINYPY_INTERNAL_DISPATCH_BIT(RMUL) | TINYPY_INTERNAL_DISPATCH_BIT(IADD) | TINYPY_INTERNAL_DISPATCH_BIT(IMUL);
 //////////////////////////////////////////////////////////////////////////
-/* The built-in sequences, which fill sq_concat and sq_repeat rather than
-   the number slots of the same names. */
-static tinypy_bool_t __tinypy_object_sequence_kind(tinypy_value_type_e kind) {
-    switch (kind) {
+/* The bases of the built-in sequences and array.array, which fill sq_concat
+   and sq_repeat rather than the number slots of the same names. */
+static tinypy_bool_t __tinypy_object_sequence_base(tinypy_vm_t *vm, const tinypy_type_t *base) {
+    switch (base->layout_kind) {
     case TINYPY_VALUE_STRING:
     case TINYPY_VALUE_UNICODE:
     case TINYPY_VALUE_TUPLE:
@@ -1262,6 +1270,10 @@ static tinypy_bool_t __tinypy_object_sequence_kind(tinypy_value_type_e kind) {
     case TINYPY_VALUE_BYTEARRAY:
     case TINYPY_VALUE_BUFFER:
         return TINYPY_TRUE;
+    case TINYPY_VALUE_NATIVE_INSTANCE: {
+        tinypy_bool_t array = base == vm->array_type ? TINYPY_TRUE : TINYPY_FALSE;
+        return array;
+    }
     default:
         return TINYPY_FALSE;
     }
@@ -1269,29 +1281,50 @@ static tinypy_bool_t __tinypy_object_sequence_kind(tinypy_value_type_e kind) {
 //////////////////////////////////////////////////////////////////////////
 /* update_one_slot passes over a slot wrapper of a type the value's type does
    not derive from under the name of its own slot, which could not bind to
-   the value, when the built-in base of the value's type, object for native
-   instances, fills that slot. The value's type keeps the C slot of its base
-   when another name of that slot still finds the slot wrapper of the base.
-   Otherwise sq_concat and sq_repeat with their in-place forms, which no
-   method fills, stay empty, so the name defines nothing, and any other slot
-   calls the method, which fails. */
-static void __tinypy_object_dispatch_foreign_wrapper(tinypy_value_t *value, tinypy_internal_dispatch_e special, tinypy_value_t *key, tinypy_bool_t *in_out_defined, tinypy_bool_t *in_out_overridden) {
+   the value, when the base whose slots the specials of the value's type
+   wrap fills that slot: the built-in base, array.array for arrays and
+   object for any other native instance. Returns that base, or NULL when the
+   type holds no such slot wrapper under key. */
+static const tinypy_type_t *__tinypy_object_foreign_wrapper_base(tinypy_value_t *value, tinypy_value_t *key) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
 
     if (kind == TINYPY_VALUE_OLD_INSTANCE) {
-        return;
-    }
-    const tinypy_type_t *base = (size_t)kind < TINYPY_BUILTIN_TYPE_COUNT ? &vm->types[kind] : &vm->types[TINYPY_VALUE_INSTANCE];
-    if (tinypy_internal_type_lookup_key(vm, base, key) == NULL) {
-        return;
+        return NULL;
     }
     tinypy_value_t *attribute = tinypy_internal_type_lookup_key(vm, value->type, key);
     if (attribute == NULL || attribute->type != vm->native_wrapper_descriptor_type || TINYPY_NAME_EQ(TINYPY_NATIVE_FUNCTION_OBJECT(attribute)->name, key) == 0 || tinypy_internal_native_method_applies(attribute, value) != 0) {
+        return NULL;
+    }
+    const tinypy_type_t *base = (size_t)kind < TINYPY_BUILTIN_TYPE_COUNT ? &vm->types[kind] : tinypy_internal_array_check(value) != TINYPY_FALSE ? vm->array_type : &vm->types[TINYPY_VALUE_INSTANCE];
+    if (tinypy_internal_type_lookup_key(vm, base, key) == NULL) {
+        return NULL;
+    }
+    return base;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Whether a name of a slot of the value's type still finds the slot wrapper
+   of its base, through which update_one_slot keeps the C slot of the base. */
+static tinypy_bool_t __tinypy_object_finds_base_wrapper(tinypy_value_t *value, tinypy_value_t *key) {
+    tinypy_bool_t found = tinypy_internal_object_has_special_key(value, key) != 0 && tinypy_internal_object_has_special_override_key(value, key) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+
+    return found;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The value's type with a slot wrapper of another type under the name of a
+   slot keeps the C slot of its base when another name of that slot still
+   finds the slot wrapper of the base. Otherwise sq_concat and sq_repeat with
+   their in-place forms, which no method fills, stay empty, so the name
+   defines nothing, and any other slot calls the method, which fails. */
+static void __tinypy_object_dispatch_foreign_wrapper(tinypy_value_t *value, tinypy_internal_dispatch_e special, tinypy_value_t *key, tinypy_bool_t *in_out_defined, tinypy_bool_t *in_out_overridden) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    const tinypy_type_t *base = __tinypy_object_foreign_wrapper_base(value, key);
+
+    if (base == NULL) {
         return;
     }
     uint64_t bit = TINYPY_INTERNAL_DISPATCH_MASK(special);
-    if ((__tinypy_object_sequence_specials & bit) != 0U && __tinypy_object_sequence_kind(kind) != 0) {
+    if ((__tinypy_object_sequence_specials & bit) != 0U && __tinypy_object_sequence_base(vm, base) != 0) {
         *in_out_defined = TINYPY_FALSE;
         *in_out_overridden = TINYPY_FALSE;
         return;
@@ -1307,11 +1340,40 @@ static void __tinypy_object_dispatch_foreign_wrapper(tinypy_value_t *value, tiny
         tinypy_value_t *sibling_key = tinypy_internal_dispatch_key(vm, (tinypy_internal_dispatch_e)sibling);
 
         siblings &= ~TINYPY_INTERNAL_DISPATCH_MASK(sibling);
-        if (tinypy_internal_object_has_special_key(value, sibling_key) != 0 && tinypy_internal_object_has_special_override_key(value, sibling_key) == 0) {
+        if (__tinypy_object_finds_base_wrapper(value, sibling_key) != 0) {
             *in_out_overridden = TINYPY_FALSE;
             return;
         }
     }
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_object_kept_slot_wrapper(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t *pair_key) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+    const tinypy_type_t *base = __tinypy_object_foreign_wrapper_base(value, key);
+
+    if (base == NULL || __tinypy_object_finds_base_wrapper(value, pair_key) == 0) {
+        return NULL;
+    }
+    tinypy_value_t *wrapper = tinypy_internal_type_lookup_key(vm, base, key);
+    return wrapper;
+}
+//////////////////////////////////////////////////////////////////////////
+/* update_one_slot makes tp_setattro PyObject_GenericSetAttr when both of its
+   names find the slot wrappers of object, which a metaclass may hold: a type
+   of that metaclass then assigns and deletes its attributes as type_setattro
+   does for a heap type, without the check of the wrappers, which still
+   refuse it when the metaclass holds one of them alone. */
+static tinypy_bool_t __tinypy_object_dispatch_generic_setattr(tinypy_value_t *value, tinypy_internal_dispatch_e special) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(value);
+
+    if (TINYPY_VALUE_KIND(value) != TINYPY_VALUE_TYPE || (special != TINYPY_INTERNAL_DISPATCH_SETATTR && special != TINYPY_INTERNAL_DISPATCH_DELATTR)) {
+        return TINYPY_FALSE;
+    }
+    const tinypy_type_t *object_type = &vm->types[TINYPY_VALUE_INSTANCE];
+    tinypy_value_t *setattr_key = vm->internal_special_setattr_key;
+    tinypy_value_t *delattr_key = vm->internal_special_delattr_key;
+    tinypy_bool_t generic = tinypy_internal_type_lookup_key(vm, value->type, setattr_key) == tinypy_internal_type_lookup_key(vm, object_type, setattr_key) && tinypy_internal_type_lookup_key(vm, value->type, delattr_key) == tinypy_internal_type_lookup_key(vm, object_type, delattr_key) ? TINYPY_TRUE : TINYPY_FALSE;
+    return generic;
 }
 //////////////////////////////////////////////////////////////////////////
 /* Records the answers for a dispatch special of a type whose dispatch memo
@@ -1353,6 +1415,9 @@ tinypy_bool_t tinypy_internal_object_memoize_dispatch(tinypy_value_t *value, uin
 
         if (overridden != 0) {
             __tinypy_object_dispatch_foreign_wrapper(value, (tinypy_internal_dispatch_e)special, key, &defined, &overridden);
+        }
+        if (overridden != 0 && __tinypy_object_dispatch_generic_setattr(value, (tinypy_internal_dispatch_e)special) != 0) {
+            overridden = TINYPY_FALSE;
         }
 
         /* A lookup comparing keys may have run Python code that changed the
@@ -1632,23 +1697,37 @@ tinypy_bool_t tinypy_internal_object_is_mapping(tinypy_vm_t *vm, tinypy_value_t 
     default:
         break;
     }
-    tinypy_bool_t mapping = __tinypy_internal_object_mapping_getitem(vm, value) != NULL && tinypy_internal_type_lookup_key(vm, value->type, vm->internal_special_getslice_key) == NULL ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_value_t *getitem;
+    tinypy_bool_t mapping = __tinypy_internal_object_mapping_getitem(vm, value, &getitem) != 0 && tinypy_internal_type_lookup_key(vm, value->type, vm->internal_special_getslice_key) == NULL ? TINYPY_TRUE : TINYPY_FALSE;
 
     return mapping;
 }
 //////////////////////////////////////////////////////////////////////////
 /* Mirrors PySequence_Check: a classic instance answers hasattr(value,
-   '__getitem__'); any other value needs sq_item, which a dict, a dictproxy
-   and a weak proxy lack though they subscript, and which a native type with
-   sequence_get has though its slot wrapper defines nothing object does not. */
+   '__getitem__'); the built-in sequences and their subclasses keep sq_item;
+   any other value needs sq_item, which a dict, a dictproxy and a weak proxy
+   lack though they subscript, and which a native type with sequence_get has
+   though its slot wrapper defines nothing object does not. */
 tinypy_bool_t tinypy_internal_object_is_sequence(tinypy_vm_t *vm, tinypy_value_t *value) {
-    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
-
-    if (kind == TINYPY_VALUE_OLD_INSTANCE) {
+    switch (TINYPY_VALUE_KIND(value)) {
+    case TINYPY_VALUE_OLD_INSTANCE: {
         tinypy_bool_t classic = tinypy_object_has_attr_value(value, vm->internal_special_getitem_key);
         return classic;
     }
-    if (kind == TINYPY_VALUE_DICT || value->type == vm->dictproxy_type || __tinypy_internal_weakref_is_proxy(value) != TINYPY_FALSE) {
+    case TINYPY_VALUE_STRING:
+    case TINYPY_VALUE_UNICODE:
+    case TINYPY_VALUE_TUPLE:
+    case TINYPY_VALUE_LIST:
+    case TINYPY_VALUE_BUFFER:
+    case TINYPY_VALUE_BYTEARRAY:
+    case TINYPY_VALUE_XRANGE:
+        return TINYPY_TRUE;
+    case TINYPY_VALUE_DICT:
+        return TINYPY_FALSE;
+    default:
+        break;
+    }
+    if (value->type == vm->dictproxy_type || __tinypy_internal_weakref_is_proxy(value) != TINYPY_FALSE) {
         return TINYPY_FALSE;
     }
     if (value->type->sequence_slots != NULL && value->type->sequence_slots->get_item != NULL) {

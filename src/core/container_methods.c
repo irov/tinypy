@@ -2013,7 +2013,9 @@ tinypy_value_t *tinypy_internal_container_compare(tinypy_value_t *left, tinypy_v
     tinypy_bool_t compatible = left_kind == right_kind ? TINYPY_TRUE : TINYPY_FALSE;
 
     /* float_richcompare leaves complex operands, string_richcompare unicode
-       ones and dict_richcompare any ordering to the other operand. */
+       ones, PyUnicode_RichCompare a buffer of an array, which has no
+       character buffer, and dict_richcompare any ordering to the other
+       operand. */
     if (left_kind == TINYPY_VALUE_BOOL || left_kind == TINYPY_VALUE_INTEGER || left_kind == TINYPY_VALUE_LONG || left_kind == TINYPY_VALUE_FLOAT || left_kind == TINYPY_VALUE_COMPLEX) {
         compatible = right_kind == TINYPY_VALUE_BOOL || right_kind == TINYPY_VALUE_INTEGER || right_kind == TINYPY_VALUE_LONG || right_kind == TINYPY_VALUE_FLOAT || (right_kind == TINYPY_VALUE_COMPLEX && left_kind != TINYPY_VALUE_FLOAT) ? TINYPY_TRUE : TINYPY_FALSE;
     }
@@ -2021,7 +2023,7 @@ tinypy_value_t *tinypy_internal_container_compare(tinypy_value_t *left, tinypy_v
         compatible = right_kind == TINYPY_VALUE_STRING ? TINYPY_TRUE : TINYPY_FALSE;
     }
     else if (left_kind == TINYPY_VALUE_UNICODE) {
-        compatible = right_kind == TINYPY_VALUE_STRING || right_kind == TINYPY_VALUE_UNICODE || right_kind == TINYPY_VALUE_BUFFER ? TINYPY_TRUE : TINYPY_FALSE;
+        compatible = right_kind == TINYPY_VALUE_STRING || right_kind == TINYPY_VALUE_UNICODE || (right_kind == TINYPY_VALUE_BUFFER && tinypy_internal_array_check(TINYPY_BUFFER_OBJECT(right)->owner) == TINYPY_FALSE) ? TINYPY_TRUE : TINYPY_FALSE;
     }
     else if (left_kind == TINYPY_VALUE_DICT) {
         compatible = right_kind == TINYPY_VALUE_DICT && (operation == TINYPY_COMPARE_EQUAL || operation == TINYPY_COMPARE_NOT_EQUAL) ? TINYPY_TRUE : TINYPY_FALSE;

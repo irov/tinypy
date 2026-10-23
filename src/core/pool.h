@@ -25,6 +25,7 @@ typedef struct tinypy_pool_arena_t {
     tinypy_pool_block_t *pool_address;
     uint32_t free_pool_count;
     uint32_t total_pool_count;
+    uint32_t kept_pool_count;
     tinypy_pool_t *free_pools;
     struct tinypy_pool_arena_t *next_arena;
     struct tinypy_pool_arena_t *previous_arena;
@@ -37,6 +38,7 @@ typedef struct tinypy_pool_cached_allocation_t {
 
 typedef struct tinypy_pool_allocator_t {
     tinypy_pool_t used_pools[TINYPY_INTERNAL_POOL_CLASS_COUNT];
+    tinypy_pool_t *kept_pools[TINYPY_INTERNAL_POOL_CLASS_COUNT];
     tinypy_pool_arena_t *arenas;
     tinypy_pool_arena_t *unused_arenas;
     tinypy_pool_arena_t *usable_arenas;
@@ -48,6 +50,9 @@ typedef struct tinypy_pool_allocator_t {
 
 void tinypy_internal_pool_initialize(tinypy_vm_t *vm);
 void tinypy_internal_pool_finalize(tinypy_vm_t *vm);
+/* Returns to the host the memory the pool keeps for reuse: the transient
+   allocations, the empty pools deallocation keeps and the wholly free arena. */
+void tinypy_internal_pool_trim(tinypy_vm_t *vm);
 void *tinypy_internal_pool_allocate(tinypy_vm_t *vm, size_t size);
 void *tinypy_internal_pool_allocate_checked(tinypy_vm_t *vm, size_t size);
 void *tinypy_internal_pool_reallocate(tinypy_vm_t *vm, void *memory, size_t old_size, size_t new_size);

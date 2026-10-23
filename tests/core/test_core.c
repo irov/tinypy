@@ -471,13 +471,185 @@ static int32_t __test_pool_allocator_budget(size_t max_heap_bytes) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+static size_t __test_pool_empty_used_pools(const tinypy_vm_t *vm) {
+    uint32_t size_class;
+    size_t count = 0U;
+
+    for (size_class = 0U; size_class < TINYPY_INTERNAL_POOL_CLASS_COUNT; ++size_class) {
+        const tinypy_pool_t *head = &vm->pool_allocator.used_pools[size_class];
+        const tinypy_pool_t *pool;
+
+        for (pool = head->next_pool; pool != head; pool = pool->next_pool) {
+            if (pool->ref == 0U) {
+                count += 1U;
+            }
+        }
+    }
+    return count;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A size class whose pools are full keeps the pool that a block took when
+   the block goes, so a loop that allocates and frees blocks at the end of its
+   pools does not take a pool from an arena on every pass; under a heap
+   budget, which the pool applies to what the bootstrap left too, no empty
+   pool stays. */
+static int32_t __test_pool_kept_pool(size_t max_heap_bytes) {
+    const size_t fill_capacity = 2048U;
+    const size_t pass_count = 4U;
+    test_allocator_state_t state;
+    tinypy_allocator_t allocator;
+    tinypy_vm_config_t config;
+    tinypy_vm_t *vm;
+    void **fills;
+    const tinypy_pool_t *head;
+    const tinypy_pool_arena_t *arena = NULL;
+    void *first_block;
+    void *block;
+    uint32_t free_pool_count;
+    size_t fill_count = 0U;
+    size_t index;
+
+    (void)memset(&state, 0, sizeof(state));
+    allocator = __test_make_allocator(&state);
+    config = __test_make_config(&allocator);
+    config.max_heap_bytes = max_heap_bytes;
+    vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    if (max_heap_bytes != 0U) {
+        TEST_CHECK(__test_pool_empty_used_pools(vm) == 0U);
+    }
+    fills = (void **)malloc(fill_capacity * sizeof(*fills));
+    TEST_CHECK(fills != NULL);
+    /* Fills the largest size class until its pools are full and the next
+       pool comes from an arena that holds other pools. */
+    head = &vm->pool_allocator.used_pools[TINYPY_INTERNAL_POOL_CLASS_COUNT - 1U];
+    do {
+        TEST_CHECK(fill_count < fill_capacity);
+        fills[fill_count] = tinypy_internal_pool_allocate(vm, TINYPY_INTERNAL_POOL_SMALL_REQUEST);
+        fill_count += 1U;
+        arena = vm->pool_allocator.usable_arenas;
+    } while (head->next_pool != head || arena == NULL || arena->free_pool_count == arena->total_pool_count);
+    free_pool_count = arena->free_pool_count;
+    for (index = 0U; index < pass_count; index += 1U) {
+        block = tinypy_internal_pool_allocate(vm, TINYPY_INTERNAL_POOL_SMALL_REQUEST);
+        TEST_CHECK(arena->free_pool_count == free_pool_count - 1U);
+        tinypy_internal_pool_deallocate(vm, block, TINYPY_INTERNAL_POOL_SMALL_REQUEST);
+        if (max_heap_bytes == 0U) {
+            TEST_CHECK(head->next_pool != head);
+            TEST_CHECK(head->next_pool->ref == 0U);
+            TEST_CHECK(arena->free_pool_count == free_pool_count - 1U);
+        }
+        else {
+            TEST_CHECK(head->next_pool == head);
+            TEST_CHECK(arena->free_pool_count == free_pool_count);
+        }
+    }
+    /* The last full pool gets a free block, so each pass fills it again and
+       takes the next pool for a second block. */
+    fill_count -= 1U;
+    tinypy_internal_pool_deallocate(vm, fills[fill_count], TINYPY_INTERNAL_POOL_SMALL_REQUEST);
+    for (index = 0U; index < pass_count; index += 1U) {
+        first_block = tinypy_internal_pool_allocate(vm, TINYPY_INTERNAL_POOL_SMALL_REQUEST);
+        block = tinypy_internal_pool_allocate(vm, TINYPY_INTERNAL_POOL_SMALL_REQUEST);
+        tinypy_internal_pool_deallocate(vm, first_block, TINYPY_INTERNAL_POOL_SMALL_REQUEST);
+        tinypy_internal_pool_deallocate(vm, block, TINYPY_INTERNAL_POOL_SMALL_REQUEST);
+        if (max_heap_bytes == 0U) {
+            TEST_CHECK(arena->free_pool_count == free_pool_count - 1U);
+        }
+        else {
+            TEST_CHECK(arena->free_pool_count == free_pool_count);
+        }
+    }
+    for (index = 0U; index < fill_count; index += 1U) {
+        tinypy_internal_pool_deallocate(vm, fills[index], TINYPY_INTERNAL_POOL_SMALL_REQUEST);
+    }
+    free(fills);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.outstanding_allocations == 0U);
+    TEST_CHECK(state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A block of every size class, each followed by more than an arena of the
+   largest blocks: whichever go first, and also when the blocks come back
+   before the arenas empty, the pools that the size classes keep when they
+   empty never keep an arena from the host. */
+static int32_t __test_pool_kept_pool_arenas(tinypy_bool_t blocks_first, tinypy_bool_t blocks_again) {
+    const size_t fill_count = 520U;
+    test_allocator_state_t state;
+    tinypy_allocator_t allocator;
+    tinypy_vm_config_t config;
+    tinypy_vm_t *vm;
+    void *blocks[TINYPY_INTERNAL_POOL_CLASS_COUNT];
+    void **fills;
+    size_t base_allocations;
+    size_t size_class;
+    size_t index;
+
+    (void)memset(&state, 0, sizeof(state));
+    allocator = __test_make_allocator(&state);
+    config = __test_make_config(&allocator);
+    vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    fills = (void **)malloc(TINYPY_INTERNAL_POOL_CLASS_COUNT * fill_count * sizeof(*fills));
+    TEST_CHECK(fills != NULL);
+    base_allocations = state.outstanding_allocations;
+    for (size_class = 0U; size_class < TINYPY_INTERNAL_POOL_CLASS_COUNT; size_class += 1U) {
+        blocks[size_class] = tinypy_internal_pool_allocate(vm, (size_class + 1U) * TINYPY_INTERNAL_ALIGNMENT);
+        for (index = 0U; index < fill_count; index += 1U) {
+            fills[size_class * fill_count + index] = tinypy_internal_pool_allocate(vm, TINYPY_INTERNAL_POOL_SMALL_REQUEST);
+        }
+    }
+    TEST_CHECK(state.outstanding_allocations > base_allocations + TINYPY_INTERNAL_POOL_CLASS_COUNT);
+    if (blocks_first != 0) {
+        for (size_class = 0U; size_class < TINYPY_INTERNAL_POOL_CLASS_COUNT; size_class += 1U) {
+            tinypy_internal_pool_deallocate(vm, blocks[size_class], (size_class + 1U) * TINYPY_INTERNAL_ALIGNMENT);
+        }
+    }
+    if (blocks_again != 0) {
+        for (size_class = 0U; size_class < TINYPY_INTERNAL_POOL_CLASS_COUNT; size_class += 1U) {
+            blocks[size_class] = tinypy_internal_pool_allocate(vm, (size_class + 1U) * TINYPY_INTERNAL_ALIGNMENT);
+        }
+    }
+    for (index = 0U; index < TINYPY_INTERNAL_POOL_CLASS_COUNT * fill_count; index += 1U) {
+        tinypy_internal_pool_deallocate(vm, fills[index], TINYPY_INTERNAL_POOL_SMALL_REQUEST);
+    }
+    if (blocks_first == 0 || blocks_again != 0) {
+        for (size_class = 0U; size_class < TINYPY_INTERNAL_POOL_CLASS_COUNT; size_class += 1U) {
+            tinypy_internal_pool_deallocate(vm, blocks[size_class], (size_class + 1U) * TINYPY_INTERNAL_ALIGNMENT);
+        }
+    }
+    /* Only the last arena that became wholly free stays. */
+    TEST_CHECK(state.outstanding_allocations <= base_allocations + 1U);
+    free(fills);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.outstanding_allocations == 0U);
+    TEST_CHECK(state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_pool_allocator(void) {
     const size_t max_heap_bytes = 64U * 1024U * 1024U;
 
     if (__test_pool_allocator_budget(0U) != 0) {
         return 1;
     }
-    int32_t result = __test_pool_allocator_budget(max_heap_bytes);
+    if (__test_pool_allocator_budget(max_heap_bytes) != 0) {
+        return 1;
+    }
+    if (__test_pool_kept_pool(0U) != 0) {
+        return 1;
+    }
+    if (__test_pool_kept_pool(max_heap_bytes) != 0) {
+        return 1;
+    }
+    if (__test_pool_kept_pool_arenas(TINYPY_FALSE, TINYPY_FALSE) != 0) {
+        return 1;
+    }
+    if (__test_pool_kept_pool_arenas(TINYPY_TRUE, TINYPY_FALSE) != 0) {
+        return 1;
+    }
+    int32_t result = __test_pool_kept_pool_arenas(TINYPY_TRUE, TINYPY_TRUE);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -857,6 +1029,46 @@ static int32_t __test_buffer_unicode_refusal(void) {
     const void *farthest_view = tinypy_buffer_view(farthest, &size);
     TEST_CHECK(farthest_view != NULL && size == 0U);
     tinypy_release(farthest);
+    tinypy_release(buffer);
+    tinypy_release(text);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.outstanding_allocations == 0U);
+    TEST_CHECK(state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* tinypy_buffer_from_object takes only the owners of the old buffer
+   protocol: any other object returns NULL with TypeError raised, as
+   PyBuffer_FromObject does, rather than a buffer whose view would read it
+   as an array. A buffer of a buffer keeps viewing the root owner. */
+static int32_t __test_buffer_unsupported_owner(void) {
+    test_allocator_state_t state;
+    size_t size = 0U;
+
+    (void)memset(&state, 0, sizeof(state));
+    tinypy_allocator_t allocator = __test_make_allocator(&state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    tinypy_value_t *type_error = &vm->exception_types[TINYPY_EXCEPTION_TYPE_ERROR]->base.base;
+    tinypy_value_t *owners[] = {tinypy_integer_from_i64(vm, INT64_C(1234567)), tinypy_list_from_items(vm, NULL, 0U), tinypy_dict_new(vm), tinypy_none_get(vm)};
+    for (size_t index = 0U; index < sizeof(owners) / sizeof(owners[0]); ++index) {
+        TEST_CHECK(owners[index] != NULL);
+        tinypy_value_t *refused = tinypy_buffer_from_object(owners[index], 0U, TINYPY_BUFFER_TO_END);
+        TEST_CHECK(refused == NULL);
+        TEST_CHECK(tinypy_vm_raised_exception_type(vm) == type_error);
+        tinypy_vm_clear_error(vm);
+        tinypy_release(owners[index]);
+    }
+    tinypy_value_t *text = tinypy_string_from_bytes(vm, "abcd", 4U);
+    TEST_CHECK(text != NULL);
+    tinypy_value_t *buffer = tinypy_buffer_from_object(text, 1U, TINYPY_BUFFER_TO_END);
+    TEST_CHECK(buffer != NULL && tinypy_vm_has_error(vm) == 0);
+    tinypy_value_t *nested = tinypy_buffer_from_object(buffer, 1U, 1U);
+    TEST_CHECK(nested != NULL && tinypy_vm_has_error(vm) == 0);
+    const char *view = (const char *)tinypy_buffer_view(nested, &size);
+    TEST_CHECK(view != NULL && size == 1U && view[0] == 'c');
+    tinypy_release(nested);
     tinypy_release(buffer);
     tinypy_release(text);
     tinypy_vm_destroy(vm);
@@ -10467,9 +10679,10 @@ static int32_t __test_native_slot_dispatch(void) {
 //////////////////////////////////////////////////////////////////////////
 /* The questions about the slots of a native instance follow the slots: the
    slot of object that a Python class holds overrides the callback of the
-   spec its host native base replaced it with, a Python class keeps the
-   mapping callback it copied after an update switches its base to a
-   sequence one, sq_item and sq_length make a host native type a sequence
+   spec its host native base replaced it with, also after an update removes
+   that callback, a Python class keeps the mapping callback it copied after
+   an update switches its base to a sequence one or removes it, sq_item and
+   sq_length make a host native type a sequence
    for apply(), map() and the offsets of __getslice__, and a host native
    subtype that lacks a callback of its base reads the attribute of its
    nearest base that is no host native type, whatever its bases are. */
@@ -10517,6 +10730,18 @@ static int32_t __test_native_special_lookups(void) {
         "expect_error(TypeError, lambda: len(Thin()), \"object of type 'Thin' has no len()\")\n"
         "check(len(Under()), 99)\n";
     static const char update_source[] =
+        "check((kept_mapping['a'], '%(a)s' % kept_mapping, eval('a', {}, kept_mapping)), (('item', 'map', 'a'), \"('item', 'map', 'a')\", ('item', 'map', 'a')))\n";
+    static const char removal_source[] =
+        "del log[:]\n"
+        "generic = Generic()\n"
+        "expect_error(AttributeError, lambda: generic.x, \"'Generic' object has no attribute 'x'\")\n"
+        "generic.y = 1\n"
+        "check(generic.__dict__, {'y': 1})\n"
+        "del generic.y\n"
+        "check((generic.__dict__, repr(generic)[:25], hash(generic) == object.__hash__(generic), Fallback().x), ({}, '<contract.Generic object ', True, 'fallback:x'))\n"
+        "kept = Kept()\n"
+        "kept.y = 1\n"
+        "check((kept.x, repr(kept), hash(kept), log, '__getattribute__' in Hooks.__dict__), (('attribute', 'hooks', 'x'), 'hooks', 1000, [('set', 'hooks', 'y')], False))\n"
         "check((kept_mapping['a'], '%(a)s' % kept_mapping, eval('a', {}, kept_mapping)), (('item', 'map', 'a'), \"('item', 'map', 'a')\", ('item', 'map', 'a')))\n";
     test_allocator_state_t allocator_state;
     test_native_wrapper_state_t states[2];
@@ -10580,6 +10805,15 @@ static int32_t __test_native_special_lookups(void) {
     mapping_spec.sequence_get = __test_native_wrapper_add;
     TEST_CHECK(tinypy_native_type_update_spec(mapping, &mapping_spec, &error) != 0 && error == NULL);
     TEST_CHECK(__test_native_contract_run(vm, globals, update_source) == 0);
+
+    /* Python classes keep the slots of the callbacks that updates remove:
+       those that object's attributes override and the mapping one. */
+    mapping_spec.sequence_get = NULL;
+    TEST_CHECK(tinypy_native_type_update_spec(mapping, &mapping_spec, &error) != 0 && error == NULL);
+    tinypy_native_type_spec_init(&spec);
+    spec.user_data = &states[0];
+    TEST_CHECK(tinypy_native_type_update_spec(hooks, &spec, &error) != 0 && error == NULL);
+    TEST_CHECK(__test_native_contract_run(vm, globals, removal_source) == 0);
 
     tinypy_release(log);
     tinypy_type_t *releases[] = {under, mixed, thin, sequence, mapping, hooks};
@@ -11644,6 +11878,10 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "buffer_unicode_refusal") == 0) {
         int result = __test_buffer_unicode_refusal();
+        return result;
+    }
+    if (strcmp(argv[1], "buffer_unsupported_owner") == 0) {
+        int result = __test_buffer_unsupported_owner();
         return result;
     }
     if (strcmp(argv[1], "string_release") == 0) {

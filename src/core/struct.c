@@ -373,10 +373,16 @@ static tinypy_bool_t __tinypy_struct_buffer_acquire(tinypy_vm_t *vm, tinypy_valu
         tinypy_internal_array_export(value, 1);
         return TINYPY_TRUE;
     }
+    /* The w* conversion asks the bf_getwritebuffer of a unicode, which
+       refuses with its own message. */
+    if (writable != 0 && kind == TINYPY_VALUE_UNICODE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "cannot use unicode as modifiable buffer", out_error);
+        return TINYPY_FALSE;
+    }
     if (writable != 0 && kind != TINYPY_VALUE_BYTEARRAY && (tinypy_internal_memoryview_check(value) == 0 || tinypy_internal_memoryview_is_readonly(value) != 0)) {
         const tinypy_message_part_t parts[] = {
             TINYPY_MESSAGE_PART_LITERAL("argument must be read-write buffer, not "),
-            TINYPY_MESSAGE_PART_TYPE_NAME(value)
+            TINYPY_MESSAGE_PART_ARGUMENT_TYPE_NAME(value)
         };
 
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);

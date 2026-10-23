@@ -2113,10 +2113,6 @@ static tinypy_value_t *__tinypy_sre_pattern_sub_expanded(tinypy_value_t *functio
         return NULL;
     }
     callable = replacement->type->call != NULL || tinypy_internal_object_has_special_key(replacement, vm->internal_special_call_key) != 0;
-    if (callable == 0 && __tinypy_sre_subject_supported(replacement) == 0) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "replacement must be a string or callable", out_error);
-        return NULL;
-    }
     if (__tinypy_sre_subject_length(vm, string, &string_size, out_error) == 0) {
         return NULL;
     }
@@ -3200,8 +3196,10 @@ static tinypy_value_t *__tinypy_sre_pattern_scanner(tinypy_value_t *function, ti
     return iterator;
 }
 //////////////////////////////////////////////////////////////////////////
-/* A replacement holding a backslash is a template, not a literal: re._subx
-   turns it into the finished string or into a filter over the match. */
+/* As in pattern_subx, a replacement that is neither callable nor a string
+   without a backslash, a template or any other object, goes to re._subx,
+   which turns it into the finished replacement or into a filter over the
+   match. */
 static tinypy_value_t *__tinypy_sre_pattern_sub(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
     tinypy_value_t *replacement;
@@ -3218,18 +3216,20 @@ static tinypy_value_t *__tinypy_sre_pattern_sub(tinypy_value_t *function, tinypy
     }
     replacement = TINYPY_TUPLE_GET(args, 1U);
     tinypy_bool_t callable = replacement->type->call != NULL || tinypy_internal_object_has_special_key(replacement, vm->internal_special_call_key) != 0;
-    if (callable != 0 || __tinypy_sre_subject_supported(replacement) == 0 || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 0U)) != TINYPY_VALUE_SRE_PATTERN) {
+    if (callable != 0 || TINYPY_VALUE_KIND(TINYPY_TUPLE_GET(args, 0U)) != TINYPY_VALUE_SRE_PATTERN) {
         tinypy_value_t *return_value_2 = __tinypy_sre_pattern_sub_expanded(function, args, kwargs, user_data, out_error);
         return return_value_2;
     }
-    size_t template_size;
+    if (__tinypy_sre_subject_supported(replacement) != 0) {
+        size_t template_size;
 
-    if (__tinypy_sre_subject_length(vm, replacement, &template_size, out_error) == 0) {
-        return NULL;
-    }
-    if (__tinypy_sre_template_is_literal(replacement, template_size) != 0) {
-        tinypy_value_t *literal = __tinypy_sre_pattern_sub_expanded(function, args, kwargs, user_data, out_error);
-        return literal;
+        if (__tinypy_sre_subject_length(vm, replacement, &template_size, out_error) == 0) {
+            return NULL;
+        }
+        if (__tinypy_sre_template_is_literal(replacement, template_size) != 0) {
+            tinypy_value_t *literal = __tinypy_sre_pattern_sub_expanded(function, args, kwargs, user_data, out_error);
+            return literal;
+        }
     }
     tinypy_value_t *helper_items[2] = {TINYPY_TUPLE_GET(args, 0U), replacement};
 

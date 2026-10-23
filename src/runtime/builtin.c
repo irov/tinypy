@@ -3756,6 +3756,12 @@ static tinypy_bool_t __tinypy_builtin_source_view(tinypy_vm_t *vm, tinypy_value_
             return TINYPY_TRUE;
         }
     }
+    /* PyObject_AsReadBuffer reads the items of an array as they are. */
+    if (tinypy_internal_array_check(value) != 0) {
+        *out_source = tinypy_internal_array_view(value, out_size);
+        *out_unicode = 0;
+        return TINYPY_TRUE;
+    }
     tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "expected a readable buffer object", out_error);
     return TINYPY_FALSE;
 }

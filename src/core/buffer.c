@@ -31,7 +31,11 @@ static const uint8_t *__tinypy_buffer_owner_view(const tinypy_value_t *owner, si
         return function_result;
     default:
         /* The items of an array, the one other owner, wherever its last
-           resize put them. */
+           resize put them; any other object has no bytes to view. */
+        if (tinypy_internal_array_check(owner) == TINYPY_FALSE) {
+            *out_size = 0U;
+            return NULL;
+        }
         function_result = tinypy_internal_array_view(owner, out_size);
         return function_result;
     }
@@ -50,6 +54,12 @@ static const uint8_t *__tinypy_buffer_constrained_view(const uint8_t *bytes, siz
 tinypy_value_t *tinypy_buffer_from_object(tinypy_value_t *object, size_t offset, size_t size) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(object);
 
+    /* PyBuffer_FromObject takes only an object with the old buffer
+       protocol. */
+    if (__tinypy_buffer_supported(object) == TINYPY_FALSE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "buffer object expected", NULL);
+        return NULL;
+    }
     if (TINYPY_VALUE_KIND(object) == TINYPY_VALUE_BUFFER) {
         tinypy_buffer_object_t *source = TINYPY_BUFFER_OBJECT(object);
 

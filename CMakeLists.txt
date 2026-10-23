@@ -260,6 +260,7 @@ if(BUILD_TESTING)
     add_test(NAME core_build_value COMMAND tinypy_core_tests build_value)
     add_test(NAME core_unicode_utf8 COMMAND tinypy_core_tests unicode_utf8)
     add_test(NAME core_buffer_unicode_refusal COMMAND tinypy_core_tests buffer_unicode_refusal)
+    add_test(NAME core_buffer_unsupported_owner COMMAND tinypy_core_tests buffer_unsupported_owner)
     add_test(
         NAME core_string_release_contract
         COMMAND tinypy_core_tests string_release)

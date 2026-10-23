@@ -177,6 +177,31 @@ class SREDeep(unittest.TestCase):
                 sys.modules['re'] = original
         self.assertEqual(imported, [('re', globals(), globals(), ['__doc__'], 0)] * 2)
 
+    def test_sub_hands_any_other_replacement_to_the_template_helper(self):
+        original = sys.modules.get('re')
+        templates = []
+        results = ['X', None, 7, 7, lambda match: '<%s>' % match.group()]
+        module = type(sys)('re')
+        def helper(pattern, template):
+            templates.append(template)
+            return results.pop(0)
+        module._subx = helper
+        sys.modules['re'] = module
+        try:
+            pattern = _letter()
+            self.assertEqual(pattern.sub(5, 'bab'), 'bXb')
+            self.assertEqual(pattern.sub(None, 'bab'), 'bb')
+            self.assertEqual(pattern.subn(('a',), 'bbb'), ('bbb', 0))
+            self.assertRaises(TypeError, pattern.sub, ['a'], 'bab')
+            self.assertEqual(pattern.sub(5, 'bab'), 'b<a>b')
+            self.assertEqual((pattern.sub('c', 'bab'), pattern.sub(bytearray('c'), 'b')), ('bcb', 'b'))
+        finally:
+            if original is None:
+                del sys.modules['re']
+            else:
+                sys.modules['re'] = original
+        self.assertEqual(templates, [5, None, ('a',), ['a'], 5])
+
     def test_getlower_uses_integer_protocol_and_signed_c_int_limits(self):
         class Character(object):
             def __int__(self):

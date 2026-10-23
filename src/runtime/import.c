@@ -551,6 +551,10 @@ static tinypy_value_t *__tinypy_import_load_one(tinypy_vm_t *vm, const char *nam
         TINYPY_DECREF(key);
         return module;
     }
+    /* The first import of array creates its type and namespace. */
+    if (vm->array_type == NULL && TINYPY_NAME_EQ(key, vm->internal_array_module_name) != TINYPY_FALSE) {
+        tinypy_internal_initialize_array_module(vm);
+    }
     tinypy_value_t *builtin_items = tinypy_dict_get_optional(vm->builtin_module_items, key);
     if (builtin_items != NULL) {
         module = __tinypy_import_init_builtin(vm, key, builtin_items, reload_module, out_error);
@@ -1176,14 +1180,18 @@ static tinypy_value_t *__tinypy_import_dict_item(tinypy_vm_t *vm, tinypy_value_t
 }
 //////////////////////////////////////////////////////////////////////////
 /* The __import__ of builtins as PyImport_Import reads it: the item of a
-   dictionary, whose failure is KeyError('__import__'), or the attribute of
-   anything else, which a plain module finds in its dictionary as the
-   generic lookup does. */
+   dictionary, whose failure is replaced with KeyError('__import__'), or the
+   attribute of anything else, which a plain module finds in its dictionary
+   as the generic lookup does. */
 static tinypy_value_t *__tinypy_import_builtins_importer(tinypy_vm_t *vm, tinypy_value_t *builtins, tinypy_error_t **out_error) {
     if (TINYPY_VALUE_KIND(builtins) == TINYPY_VALUE_DICT) {
         tinypy_value_t *item = __tinypy_import_dict_item(vm, builtins, vm->internal_import_key, out_error);
 
         if (item == NULL) {
+            if (out_error != NULL && *out_error != NULL) {
+                tinypy_error_release(*out_error);
+                *out_error = NULL;
+            }
             tinypy_internal_exception_raise_key_error(vm, vm->internal_import_key, out_error);
         }
         return item;

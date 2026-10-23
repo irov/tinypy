@@ -55,6 +55,18 @@ class StructArgumentsAudit(unittest.TestCase):
         self.assert_error(struct.error, 'pack_into expected 1 items for packing (got 0)',
                           struct.pack_into, '<d', bytearray('X' * 8), 0)
 
+    def test_pack_into_buffer_errors_follow_converterr(self):
+        class Text(unicode):
+            pass
+        for operation, prefix in ((struct.pack_into, ('<d',)), (struct.Struct('<d').pack_into, ())):
+            self.assert_error(TypeError, 'argument must be read-write buffer, not None',
+                              operation, *(prefix + (None, 0, 1.0)))
+            self.assert_error(TypeError, 'argument must be read-write buffer, not str',
+                              operation, *(prefix + ('X' * 8, 0, 1.0)))
+            for text in (u'X' * 8, Text(u'X' * 8)):
+                self.assert_error(TypeError, 'cannot use unicode as modifiable buffer',
+                                  operation, *(prefix + (text, 0, 1.0)))
+
     def test_compiled_unpack_bound_and_unbound_arguments(self):
         value = struct.Struct('<d')
         for operation, prefix in ((value.unpack, ()), (struct.Struct.unpack, (value,))):

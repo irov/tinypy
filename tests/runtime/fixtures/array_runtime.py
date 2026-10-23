@@ -1,6 +1,9 @@
+import sys
+
+# The first import of array creates the module and its type.
+assert "array" not in sys.modules
 import _struct as struct
 import array
-import sys
 
 
 A = array.array
@@ -90,6 +93,23 @@ assert grown[:3].tolist() == [1, 2, 3] and grown[-2:].tolist() == [4, 7]
 source = A("c", "xyzw")
 source.fromstring(buffer(source, 1, 2))
 assert source.tostring() == "xyzwyz"
+
+
+# fromstring refuses the array itself, or a buffer of it, while the array
+# holds storage for its items, which an array emptied by deletions keeps. A
+# fresh array has none, and extending it by an empty array or deleting an
+# empty extended slice allocates none, where CPython 2.7 allocates storage
+# and then refuses the array.
+empty = A("b")
+empty.extend(A("b"))
+empty.fromstring(empty)
+del empty[::2]
+empty += A("b")
+empty.fromstring(buffer(empty))
+assert empty.tolist() == [] and empty.buffer_info() == (0, 0)
+emptied = A("b", [1])
+del emptied[0]
+expect(ValueError, "array.fromstring(x): x cannot be self", emptied.fromstring, emptied)
 
 
 # A struct call that holds the items exports them: a callback cannot resize

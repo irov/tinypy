@@ -2687,14 +2687,14 @@ static tinypy_value_t *__tinypy_internal_type_lend_found(tinypy_value_t *value) 
     return held != 0 ? value : NULL;
 }
 //////////////////////////////////////////////////////////////////////////
-/* _PyType_Lookup and the walk of super_getattro. The walk holds the type and
-   its MRO tuple, so a key comparison that reassigns __bases__, a classic
-   __dict__ or the __class__ of the last instance frees neither, and like
-   _PyType_Lookup it never restarts but finishes on the entries it started
-   with. A static type walks its base chain until its MRO tuple is
-   materialised; a heap type has none only while its metaclass computes it,
-   and nothing is found in it. */
-tinypy_value_t *tinypy_internal_type_lookup_after(tinypy_vm_t *vm, const tinypy_type_t *type, const tinypy_value_t *start, tinypy_value_t *key) {
+/* _PyType_Lookup and the walk of super_getattro over the MRO entries after
+   start and before stop. The walk holds the type and its MRO tuple, so a key
+   comparison that reassigns __bases__, a classic __dict__ or the __class__
+   of the last instance frees neither, and like _PyType_Lookup it never
+   restarts but finishes on the entries it started with. A static type walks
+   its base chain until its MRO tuple is materialised; a heap type has none
+   only while its metaclass computes it, and nothing is found in it. */
+static tinypy_value_t *__tinypy_internal_type_lookup_range(tinypy_vm_t *vm, const tinypy_type_t *type, const tinypy_value_t *start, const tinypy_value_t *stop, tinypy_value_t *key) {
     tinypy_value_t *mro = type->mro;
     tinypy_value_t *value = NULL;
     tinypy_bool_t searching = start == NULL ? TINYPY_TRUE : TINYPY_FALSE;
@@ -2713,6 +2713,9 @@ tinypy_value_t *tinypy_internal_type_lookup_after(tinypy_vm_t *vm, const tinypy_
     for (size_t index = 0U; index < mro_size && value == NULL; ++index) {
         tinypy_value_t *entry = mro != NULL ? TINYPY_TUPLE_GET(mro, index) : __tinypy_internal_type_mro_value_at(type, index);
 
+        if (entry == stop) {
+            break;
+        }
         if (searching == 0) {
             searching = entry == start ? TINYPY_TRUE : TINYPY_FALSE;
             continue;
@@ -2726,6 +2729,16 @@ tinypy_value_t *tinypy_internal_type_lookup_after(tinypy_vm_t *vm, const tinypy_
     }
     TINYPY_DECREF((tinypy_value_t *)&type->base.base);
     tinypy_internal_exception_preserve_restore(vm, &state);
+    return value;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_type_lookup_after(tinypy_vm_t *vm, const tinypy_type_t *type, const tinypy_value_t *start, tinypy_value_t *key) {
+    tinypy_value_t *value = __tinypy_internal_type_lookup_range(vm, type, start, NULL, key);
+    return value;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_value_t *tinypy_internal_type_lookup_before(tinypy_vm_t *vm, const tinypy_type_t *type, const tinypy_value_t *stop, tinypy_value_t *key) {
+    tinypy_value_t *value = __tinypy_internal_type_lookup_range(vm, type, NULL, stop, key);
     return value;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2745,7 +2758,7 @@ tinypy_value_t *tinypy_internal_type_lookup_key(tinypy_vm_t *vm, const tinypy_ty
        frees the type only after the lookup, and with it what only the type
        held; a comparison that changed the type leaves nothing to cache. */
     TINYPY_INCREF((tinypy_value_t *)&type->base.base);
-    tinypy_value_t *found = tinypy_internal_type_lookup_after(vm, type, NULL, key);
+    tinypy_value_t *found = __tinypy_internal_type_lookup_range(vm, type, NULL, NULL, key);
     tinypy_bool_t cacheable = entry != NULL && type->version == version ? TINYPY_TRUE : TINYPY_FALSE;
 
     TINYPY_DECREF((tinypy_value_t *)&type->base.base);

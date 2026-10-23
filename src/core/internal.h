@@ -2911,6 +2911,8 @@ void tinypy_internal_unicode_error_update(tinypy_vm_t *vm, tinypy_value_t *excep
 void tinypy_internal_initialize_functools_module(tinypy_vm_t *vm);
 void tinypy_internal_initialize_struct_module(tinypy_vm_t *vm);
 void tinypy_internal_initialize_copy_reg_module(tinypy_vm_t *vm);
+/* Creates array.array and saves the namespace of the array module among the
+   built-in modules, which the first import of array does. */
 void tinypy_internal_initialize_array_module(tinypy_vm_t *vm);
 /* An instance of array.array or of a subclass. */
 tinypy_bool_t tinypy_internal_array_check(const tinypy_value_t *value);
@@ -2923,6 +2925,10 @@ void tinypy_internal_array_export(tinypy_value_t *value, int32_t change);
    the sequence protocol of the operators calls. */
 tinypy_value_t *tinypy_internal_array_concat(tinypy_value_t *array, tinypy_value_t *other, tinypy_bool_t inplace, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_array_repeat(tinypy_value_t *array, int64_t count, tinypy_bool_t inplace, tinypy_error_t **out_error);
+/* The sq_slice and sq_ass_slice of an array, which a[i:j] calls with the
+   offsets it converted and adjusted to the length: value NULL deletes. */
+tinypy_value_t *tinypy_internal_array_slice(tinypy_value_t *array, int64_t low, int64_t high, tinypy_error_t **out_error);
+tinypy_bool_t tinypy_internal_array_assign_slice(tinypy_value_t *array, int64_t low, int64_t high, tinypy_value_t *value, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_array_field(tinypy_value_t *value, size_t index);
 tinypy_value_t *tinypy_internal_array_iterator_new(tinypy_value_t *array);
 tinypy_value_t *tinypy_internal_array_iterator_item(tinypy_value_t *array, size_t index, tinypy_error_t **out_error);
@@ -3051,6 +3057,8 @@ tinypy_value_t *tinypy_internal_type_lookup_key(tinypy_vm_t *vm, const tinypy_ty
 /* Owned value of the name in the MRO entries after start, or from the type
    itself when start is NULL. */
 tinypy_value_t *tinypy_internal_type_lookup_after(tinypy_vm_t *vm, const tinypy_type_t *type, const tinypy_value_t *start, tinypy_value_t *key);
+/* Owned value of the name in the MRO entries before stop. */
+tinypy_value_t *tinypy_internal_type_lookup_before(tinypy_vm_t *vm, const tinypy_type_t *type, const tinypy_value_t *stop, tinypy_value_t *key);
 void tinypy_internal_type_message_name(const tinypy_type_t *type, tinypy_message_part_t out_parts[3]);
 void tinypy_internal_type_uncreatable_error(tinypy_type_t *type, tinypy_error_t **out_error);
 void tinypy_internal_type_set_attr_key(tinypy_type_t *type, tinypy_value_t *key, tinypy_value_t *value);
@@ -3103,6 +3111,13 @@ tinypy_bool_t tinypy_internal_old_instance_has_special_key(tinypy_value_t *value
 tinypy_value_t *tinypy_internal_class_hook(tinypy_value_t *class_value, tinypy_value_t *name);
 tinypy_bool_t tinypy_internal_object_has_special_key(tinypy_value_t *value, tinypy_value_t *key);
 tinypy_bool_t tinypy_internal_object_has_special_override_key(tinypy_value_t *value, tinypy_value_t *key);
+/* The slot wrapper of its base that serves the slot of key for the type of a
+   new-style value holding a slot wrapper of a type it does not derive from
+   under key, borrowed: update_one_slot keeps the C slot of the base while
+   pair_key, the other name of that slot, still finds the slot wrapper of the
+   base. NULL when the type holds no such wrapper or pair_key finds another
+   method. Serves sq_ass_slice, whose names are no dispatch specials. */
+tinypy_value_t *tinypy_internal_object_kept_slot_wrapper(tinypy_value_t *value, tinypy_value_t *key, tinypy_value_t *pair_key);
 /* Borrows the eager VM preset naming a dispatch special. */
 tinypy_value_t *tinypy_internal_dispatch_key(tinypy_vm_t *vm, tinypy_internal_dispatch_e special);
 /* tinypy_internal_object_has_special_key, or with overrides set
@@ -3166,17 +3181,22 @@ static inline tinypy_value_t *__tinypy_internal_object_special_attribute(tinypy_
     return attribute;
 }
 //////////////////////////////////////////////////////////////////////////
-/* The __getitem__ that fills mp_subscript of the type of a new-style value,
-   borrowed: a slot wrapper of the slot of the type does for its mapping
-   callback, but not for the sequence one, sq_item. */
-static inline tinypy_value_t *__tinypy_internal_object_mapping_getitem(tinypy_vm_t *vm, tinypy_value_t *value) {
+/* Whether the type of a new-style value fills mp_subscript, with the
+   __getitem__ that the type finds, borrowed or NULL: a slot wrapper of the
+   slot of the type does for its mapping callback, but not for the sequence
+   one, sq_item, and the mapping callback of the spec of a host native type
+   or of a Python class that copied it does even when an update left the
+   name without a wrapper. */
+static inline tinypy_bool_t __tinypy_internal_object_mapping_getitem(tinypy_vm_t *vm, tinypy_value_t *value, tinypy_value_t **out_getitem) {
     tinypy_bool_t slot;
     tinypy_value_t *getitem = __tinypy_internal_object_special_attribute(vm, value, vm->internal_special_getitem_key, &slot);
 
-    if (slot != 0 && (value->type->mapping_slots == NULL || value->type->mapping_slots->get_item == NULL)) {
-        return NULL;
+    *out_getitem = getitem;
+    if (getitem != NULL && slot == 0) {
+        return TINYPY_TRUE;
     }
-    return getitem;
+    tinypy_bool_t native_mapping = value->type->mapping_slots != NULL && value->type->mapping_slots->get_item != NULL && TINYPY_VALUE_KIND(value) == TINYPY_VALUE_NATIVE_INSTANCE ? TINYPY_TRUE : TINYPY_FALSE;
+    return native_mapping;
 }
 //////////////////////////////////////////////////////////////////////////
 static inline tinypy_bool_t __tinypy_internal_object_overrides_dispatch(tinypy_value_t *value, uint64_t specials) {

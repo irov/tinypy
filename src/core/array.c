@@ -488,6 +488,18 @@ static tinypy_bool_t __tinypy_array_resize_allowed(tinypy_value_t *array, size_t
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Gives the storage of the items back, which leaves the array empty. */
+static void __tinypy_array_release_items(tinypy_value_t *array) {
+    tinypy_array_payload_t *payload = __tinypy_array_payload(array);
+
+    if (payload->items != NULL) {
+        tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(array), payload->items, payload->capacity * payload->descriptor->item_size);
+        payload->items = NULL;
+    }
+    payload->size = 0U;
+    payload->capacity = 0U;
+}
+//////////////////////////////////////////////////////////////////////////
 /* array_resize: the storage stays until the size falls 16 items below the
    size it had, and a new storage adds a sixteenth and a few items, which
    keeps a series of appends linear. A shrink never fails once the exports
@@ -565,7 +577,9 @@ static tinypy_value_t *__tinypy_array_new(tinypy_type_t *type, const tinypy_arra
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* array_slice and the step loop of array_subscr: always an array.array. */
+/* array_slice and the step loop of array_subscr: always an array.array. The
+   position of each item is reached from start, as a step past the last item
+   may leave the range of int64_t. */
 static tinypy_value_t *__tinypy_array_slice(tinypy_value_t *array, size_t start, int64_t step, size_t length, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(array);
     const tinypy_array_payload_t *payload = __tinypy_array_payload(array);
@@ -580,10 +594,10 @@ static tinypy_value_t *__tinypy_array_slice(tinypy_value_t *array, size_t start,
         (void)memcpy(items, payload->items + start * item_size, length * item_size);
         return result;
     }
-    int64_t position = (int64_t)start;
     for (size_t index = 0U; index < length; ++index) {
-        (void)memcpy(items + index * item_size, payload->items + (size_t)position * item_size, item_size);
-        position += step;
+        size_t position = (size_t)((int64_t)start + (int64_t)index * step);
+
+        (void)memcpy(items + index * item_size, payload->items + position * item_size, item_size);
     }
     return result;
 }
@@ -854,12 +868,11 @@ static tinypy_value_t *__tinypy_array_subscript(tinypy_value_t *instance, void *
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* The array that replaces a slice: a copy of the array assigned to itself,
-   another array of the same typecode, or NULL for a deletion. */
-static tinypy_bool_t __tinypy_array_replacement(tinypy_value_t *array, tinypy_value_t *value, tinypy_value_t **out_replacement, tinypy_error_t **out_error) {
+/* The value that replaces a slice of another array: an array of the same
+   typecode, or NULL for a deletion. */
+static TINYPY_ALWAYS_INLINE tinypy_bool_t __tinypy_array_replacement_check(tinypy_value_t *array, tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(array);
 
-    *out_replacement = NULL;
     if (value == NULL) {
         return TINYPY_TRUE;
     }
@@ -873,17 +886,60 @@ static tinypy_bool_t __tinypy_array_replacement(tinypy_value_t *array, tinypy_va
         tinypy_internal_make_vm_error_parts(vm, TINYPY_ERROR_TYPE, parts, sizeof(parts) / sizeof(parts[0]), out_error);
         return TINYPY_FALSE;
     }
-    if (value == array) {
-        *out_replacement = __tinypy_array_copy(array, out_error);
-        tinypy_bool_t copied = *out_replacement != NULL ? TINYPY_TRUE : TINYPY_FALSE;
-        return copied;
-    }
     if (__tinypy_array_payload(value)->descriptor != __tinypy_array_payload(array)->descriptor) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "bad argument type for built-in operation", out_error);
         return TINYPY_FALSE;
     }
-    *out_replacement = TINYPY_RET(value);
     return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+/* array_slice and array_ass_slice bound both offsets by the size, the
+   second one by the first one too. */
+static void __tinypy_array_bound_offsets(tinypy_value_t *array, int64_t low, int64_t high, size_t *out_start, size_t *out_stop) {
+    size_t size = __tinypy_array_payload(array)->size;
+    size_t start = low < 0 ? 0U : ((uint64_t)low > (uint64_t)size ? size : (size_t)low);
+    size_t stop = high < 0 ? 0U : ((uint64_t)high > (uint64_t)size ? size : (size_t)high);
+
+    *out_start = start;
+    *out_stop = stop < start ? start : stop;
+}
+//////////////////////////////////////////////////////////////////////////
+/* array_slice, the sq_slice of an array, which apply_slice calls with the
+   offsets of a[i:j]. */
+tinypy_value_t *tinypy_internal_array_slice(tinypy_value_t *array, int64_t low, int64_t high, tinypy_error_t **out_error) {
+    size_t start;
+    size_t stop;
+
+    TINYPY_CLEAR_ERROR(out_error);
+    __tinypy_array_bound_offsets(array, low, high, &start, &stop);
+    tinypy_value_t *result = __tinypy_array_slice(array, start, 1, stop - start, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* array_ass_slice, the sq_ass_slice of an array, which assign_slice calls
+   with the offsets of a[i:j]: value NULL deletes, and an array assigned to
+   itself is copied first. */
+tinypy_bool_t tinypy_internal_array_assign_slice(tinypy_value_t *array, int64_t low, int64_t high, tinypy_value_t *value, tinypy_error_t **out_error) {
+    size_t start;
+    size_t stop;
+
+    TINYPY_CLEAR_ERROR(out_error);
+    if (value == array) {
+        tinypy_value_t *copy = __tinypy_array_copy(array, out_error);
+        if (copy == NULL) {
+            return TINYPY_FALSE;
+        }
+        tinypy_bool_t assigned = tinypy_internal_array_assign_slice(array, low, high, copy, out_error);
+        TINYPY_DECREF(copy);
+        return assigned;
+    }
+    if (__tinypy_array_replacement_check(array, value, out_error) == TINYPY_FALSE) {
+        return TINYPY_FALSE;
+    }
+    __tinypy_array_bound_offsets(array, low, high, &start, &stop);
+    const tinypy_array_payload_t *source = value != NULL ? __tinypy_array_payload(value) : NULL;
+    tinypy_bool_t replaced = __tinypy_array_replace(array, start, stop, source != NULL ? source->items : NULL, source != NULL ? source->size : 0U, out_error);
+    return replaced;
 }
 //////////////////////////////////////////////////////////////////////////
 /* array_ass_subscr for a slice whose indices the caller adjusted. */
@@ -929,10 +985,10 @@ static tinypy_bool_t __tinypy_array_assign_slice(tinypy_value_t *array, tinypy_i
     }
     tinypy_array_payload_t *payload = __tinypy_array_payload(array);
     size_t item_size = payload->descriptor->item_size;
-    int64_t position = slice->start;
     for (size_t index = 0U; index < needed; ++index) {
-        (void)memcpy(payload->items + (size_t)position * item_size, items + index * item_size, item_size);
-        position += slice->step;
+        size_t position = (size_t)(slice->start + (int64_t)index * slice->step);
+
+        (void)memcpy(payload->items + position * item_size, items + index * item_size, item_size);
     }
     return TINYPY_TRUE;
 }
@@ -971,14 +1027,21 @@ static tinypy_bool_t __tinypy_array_assign_subscript(tinypy_value_t *instance, v
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "array indices must be integer", out_error);
         return TINYPY_FALSE;
     }
-    tinypy_value_t *replacement;
-    if (__tinypy_array_replacement(instance, value, &replacement, out_error) == TINYPY_FALSE) {
+    /* array_ass_subscr assigns a copy of the array assigned to a slice of
+       itself through a call of its own, which reads the slice again. */
+    if (value == instance) {
+        tinypy_value_t *copy = __tinypy_array_copy(instance, out_error);
+        if (copy == NULL) {
+            return TINYPY_FALSE;
+        }
+        tinypy_bool_t assigned = __tinypy_array_assign_subscript(instance, payload, key, copy, user_data, out_error);
+        TINYPY_DECREF(copy);
+        return assigned;
+    }
+    if (__tinypy_array_replacement_check(instance, value, out_error) == TINYPY_FALSE) {
         return TINYPY_FALSE;
     }
-    tinypy_bool_t assigned = __tinypy_array_assign_slice(instance, &slice, replacement, out_error);
-    if (replacement != NULL) {
-        TINYPY_DECREF(replacement);
-    }
+    tinypy_bool_t assigned = __tinypy_array_assign_slice(instance, &slice, value, out_error);
     return assigned;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1287,7 +1350,15 @@ tinypy_value_t *tinypy_internal_array_repeat(tinypy_value_t *array, int64_t coun
         }
         return result;
     }
-    if (size != 0U) {
+    /* array_inplace_repeat frees the items of an array repeated at most no
+       times. */
+    if (size != 0U && repeat == 0U) {
+        if (__tinypy_array_resize_allowed(array, 0U, out_error) == TINYPY_FALSE) {
+            return NULL;
+        }
+        __tinypy_array_release_items(array);
+    }
+    else if (size != 0U) {
         if (__tinypy_array_resize(array, size * repeat, out_error) == TINYPY_FALSE) {
             return NULL;
         }
@@ -1324,6 +1395,12 @@ static tinypy_bool_t __tinypy_array_sequence_size(tinypy_vm_t *vm, tinypy_value_
     }
     if (length < 0) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_VALUE, "__len__() should return >= 0", out_error);
+        return TINYPY_FALSE;
+    }
+    /* A length beyond the address space of a 32-bit host is as unallocatable
+       as one beyond the storage limit. */
+    if ((uint64_t)length > (uint64_t)PTRDIFF_MAX) {
+        tinypy_internal_vm_allocation_error(vm, out_error);
         return TINYPY_FALSE;
     }
     *out_size = (size_t)length;
@@ -2002,36 +2079,35 @@ static tinypy_value_t *__tinypy_array_repeat_method(tinypy_value_t *function, ti
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* wrap_ssizessizeargfunc passes the offsets to array_slice as they are. */
 static tinypy_value_t *__tinypy_array_getslice_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
+    int64_t offsets[2];
+
     (void)user_data;
     if (tinypy_internal_native_method_arguments(function, args, kwargs, 2U, 2U, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
-    tinypy_value_t *slice = tinypy_internal_legacy_slice_new(args, out_error);
-    if (slice == NULL) {
+    if (tinypy_internal_slice_offset_arguments(args, offsets, out_error) == TINYPY_FALSE) {
         return NULL;
     }
-    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
-    tinypy_value_t *result = __tinypy_array_subscript(self, __tinypy_array_payload(self), slice, NULL, out_error);
-    TINYPY_DECREF(slice);
+    tinypy_value_t *result = tinypy_internal_array_slice(TINYPY_TUPLE_GET(args, 0U), offsets[0], offsets[1], out_error);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-/* __setslice__ and __delslice__, whose user data tells them apart. */
+/* __setslice__ and __delslice__, whose user data tells them apart, pass the
+   offsets to array_ass_slice as they are. */
 static tinypy_value_t *__tinypy_array_setslice_method(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, void *user_data, tinypy_error_t **out_error) {
     size_t arguments = user_data != NULL ? 3U : 2U;
+    int64_t offsets[2];
 
     if (tinypy_internal_native_method_arguments(function, args, kwargs, arguments, arguments, TINYPY_ARITY_STYLE_PARSED, out_error) == TINYPY_FALSE) {
         return NULL;
     }
-    tinypy_value_t *slice = tinypy_internal_legacy_slice_new(args, out_error);
-    if (slice == NULL) {
+    if (tinypy_internal_slice_offset_arguments(args, offsets, out_error) == TINYPY_FALSE) {
         return NULL;
     }
-    tinypy_value_t *self = TINYPY_TUPLE_GET(args, 0U);
     tinypy_value_t *value = user_data != NULL ? TINYPY_TUPLE_GET(args, 3U) : NULL;
-    tinypy_bool_t assigned = __tinypy_array_assign_subscript(self, __tinypy_array_payload(self), slice, value, NULL, out_error);
-    TINYPY_DECREF(slice);
+    tinypy_bool_t assigned = tinypy_internal_array_assign_slice(TINYPY_TUPLE_GET(args, 0U), offsets[0], offsets[1], value, out_error);
     tinypy_value_t *result = __tinypy_array_none(TINYPY_VALUE_VM(function), assigned);
     return result;
 }
@@ -2120,13 +2196,8 @@ static void __tinypy_array_release_references(tinypy_value_t *value, tinypy_rele
 /* The items live outside the instance, so the shutdown sweep of
    tinypy_vm_destroy releases them too. */
 static void __tinypy_array_destroy(tinypy_value_t *value) {
-    tinypy_array_payload_t *payload = __tinypy_array_payload(value);
-
     tinypy_internal_native_instance_destroy(value);
-    if (payload->items != NULL) {
-        tinypy_internal_vm_deallocate(TINYPY_VALUE_VM(value), payload->items, payload->capacity * payload->descriptor->item_size);
-        payload->items = NULL;
-    }
+    __tinypy_array_release_items(value);
 }
 //////////////////////////////////////////////////////////////////////////
 void tinypy_internal_initialize_array_module(tinypy_vm_t *vm) {
@@ -2215,6 +2286,9 @@ void tinypy_internal_initialize_array_module(tinypy_vm_t *vm) {
     type->destroy = __tinypy_array_destroy;
     type->create = __tinypy_array_create;
     tinypy_dict_delete(type->dict, vm->internal_special_weakref_key);
+    /* A type created while code runs takes the __module__ of that code;
+       array.array finds its module in its name. */
+    tinypy_dict_delete(type->dict, vm->internal_special_module_key);
     tinypy_type_set_attr_key(type, vm->internal_special_doc_key, type_doc_value);
     TINYPY_DECREF(type_doc_value);
     tinypy_internal_constructor_add_builtin_new(type);
@@ -2265,16 +2339,16 @@ void tinypy_internal_initialize_array_module(tinypy_vm_t *vm) {
     type->flags |= TINYPY_TYPE_FLAG_IMMUTABLE;
     vm->array_type = type;
 
-    tinypy_value_t *module = tinypy_module_new_key(vm->internal_array_module_name);
-    tinypy_value_t *name = TINYPY_RET(vm->internal_array_module_name);
     tinypy_value_t *doc = tinypy_string_from_bytes(vm, module_doc, sizeof(module_doc) - 1U);
+    tinypy_value_t *const namespace_items[] = {
+        vm->internal_special_name_key, vm->internal_array_module_name,
+        vm->internal_special_doc_key, doc,
+        vm->internal_array_type_key, &type->base.base,
+        vm->internal_array_module_name, &type->base.base
+    };
+    tinypy_value_t *items = tinypy_tuple_from_items(vm, namespace_items, sizeof(namespace_items) / sizeof(namespace_items[0]));
 
-    tinypy_module_add_value_key(module, vm->internal_special_name_key, name);
-    tinypy_module_add_value_key(module, vm->internal_special_doc_key, doc);
-    tinypy_module_add_value_key(module, vm->internal_array_type_key, &type->base.base);
-    tinypy_module_add_value_key(module, vm->internal_array_module_name, &type->base.base);
+    tinypy_dict_set(vm->builtin_module_items, vm->internal_array_module_name, items);
+    TINYPY_DECREF(items);
     TINYPY_DECREF(doc);
-    TINYPY_DECREF(name);
-    tinypy_internal_register_module(vm, vm->internal_array_module_name, module);
-    TINYPY_DECREF(module);
 }

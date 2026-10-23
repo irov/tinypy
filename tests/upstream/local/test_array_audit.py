@@ -73,6 +73,16 @@ class Sub(A):
     pass
 
 
+class Index(object):
+    def __init__(self, log, value):
+        self.log = log
+        self.value = value
+
+    def __index__(self):
+        self.log.append(self.value)
+        return self.value
+
+
 class ArrayAudit(unittest.TestCase):
     def assert_error(self, error_type, message, operation, *args, **kwargs):
         try:
@@ -212,6 +222,125 @@ class ArrayAudit(unittest.TestCase):
         self.assert_error(TypeError, 'bad argument type for built-in operation',
                           target.__setitem__, slice(0, 1), A('i', [1]))
 
+    def test_steps_near_the_size_limit(self):
+        target = A('i', range(5))
+        self.assertEqual([target[1::sys.maxsize].tolist(), target[4::sys.maxsize].tolist(), target[3::-sys.maxsize].tolist(),
+                          target[::-sys.maxsize - 1].tolist()], [[1], [4], [3], [4]])
+        target[1::sys.maxsize] = A('i', [7])
+        target[3::-sys.maxsize] = A('i', [8])
+        self.assertEqual(target.tolist(), [0, 7, 2, 8, 4])
+        del target[2::sys.maxsize]
+        del target[::-sys.maxsize]
+        self.assertEqual(target.tolist(), [0, 7, 8])
+
+    def test_simple_slices_take_the_offsets(self):
+        log = []
+        target = A('i', range(6))
+        self.assertEqual([target[-2:].tolist(), target[-100:2].tolist(), target[2 ** 70:].tolist(),
+                          target[-2 ** 70:1L].tolist(), target[4:2].tolist(), target[Index(log, -3):Index(log, 5)].tolist()],
+                         [[4, 5], [0, 1], [], [0], [], [3, 4]])
+        self.assertEqual(log, [-3, 5])
+        self.assertIs(type(Sub('i', [1, 2])[0:1]), A)
+        self.assertEqual((target.__getslice__(-2, 3).tolist(), target.__getslice__(4, 2 ** 40).tolist()), ([0, 1, 2], [4, 5]))
+        self.assert_error(TypeError, 'slice indices must be integers or None or have an __index__ method', lambda: target[1.5:])
+        self.assert_error(TypeError, 'integer argument expected, got float', target.__getslice__, 1.5, 2)
+        self.assert_error(OverflowError, 'Python int too large to convert to C long', target.__getslice__, 2 ** 70, 2)
+
+        def assign(value):
+            target[0:1] = value
+        self.assert_error(TypeError, 'can only assign array (not "list") to array slice', assign, [1])
+        self.assert_error(TypeError, 'bad argument type for built-in operation', assign, A('h', [1]))
+        target[1:3] = target
+        target[-1:] = A('i', [9, 9])
+        self.assertEqual(target.tolist(), [0, 0, 1, 2, 3, 4, 5, 3, 4, 9, 9])
+        del target[-3:-1]
+        target.__setslice__(-1, 1, A('i', [4]))
+        target.__delslice__(-5, 2)
+        target[4:1] = A('i', [6])
+        self.assertEqual(target.tolist(), [1, 2, 3, 4, 6, 5, 3, 9])
+
+    def test_slice_methods_and_length_of_subclasses(self):
+        log = []
+
+        class Logged(A):
+            def __getslice__(self, low, high):
+                log.append(('get', low, high))
+                return 'got'
+
+            def __setslice__(self, low, high, value):
+                log.append(('set', low, high))
+
+            def __delslice__(self, low, high):
+                log.append(('del', low, high))
+
+            def __len__(self):
+                return 10
+
+        class Short(A):
+            def __len__(self):
+                return 3
+
+        class SetOnly(A):
+            def __setslice__(self, low, high, value):
+                log.append(('set only', low, high))
+        logged = Logged('i', range(3))
+        self.assertEqual((logged[-1:], logged[1:2]), ('got', 'got'))
+        logged[1:2] = A('i')
+        del logged[-2:-1]
+        self.assertEqual(log, [('get', 9, sys.maxsize), ('get', 1, 2), ('set', 1, 2), ('del', 8, 9)])
+        short = Short('i', range(5))
+        self.assertEqual((short[-1:].tolist(), short[-5:-2].tolist()), ([2, 3, 4], [0]))
+        short[-1:] = A('i')
+        del short[-2:]
+        self.assertEqual(short.tolist(), [0])
+        del log[:]
+        set_only = SetOnly('i', range(4))
+        set_only[0:1] = A('i')
+        del set_only[0:1]
+        self.assertEqual((log, set_only.tolist()), ([('set only', 0, 1)], [1, 2, 3]))
+
+    def test_self_slice_assignment_reads_the_slice_again(self):
+        log = []
+        target = A('h', [1, 2, 3])
+        target[::Index(log, 1)] = target
+        self.assertEqual(log, [1, 1])
+        target[Index(log, 0):] = target
+        self.assertEqual(log, [1, 1, 0])
+        target[slice(Index(log, 1), None)] = target
+        self.assertEqual((log, target.tolist()), ([1, 1, 0, 1, 1], [1, 1, 2, 3]))
+
+    def test_inplace_repeat_by_nothing_frees_the_items(self):
+        for count in (0, -2):
+            target = A('i', [1, 2])
+            target *= count
+            self.assertEqual(target.buffer_info(), (0, 0))
+            target.fromstring(target)
+            target.fromstring(buffer(target))
+            target.append(3)
+            self.assertEqual(target.tolist(), [3])
+        self.assertEqual(A('i').buffer_info(), (0, 0))
+
+    def test_compile_reads_an_array(self):
+        self.assertEqual(eval(compile(A('c', '1+3'), 's', 'eval')), 4)
+        self.assertEqual(eval(compile(A('B', [0x34]), 's', 'eval')), 4)
+        self.assertEqual(eval(compile(Sub('c', '7*6'), 's', 'eval')), 42)
+        self.assertEqual(compile(A('c'), 's', 'exec').co_consts, (None,))
+        self.assert_error(TypeError, 'compile() expected string without null bytes', compile, A('u', u'1'), 's', 'eval')
+        self.assertRaises(SyntaxError, compile, A('c'), 's', 'eval')
+        self.assert_error(TypeError, 'eval() arg 1 must be a string or code object', eval, A('c', '1'))
+        self.assert_error(TypeError, "int() argument must be a string or a number, not 'array.array'", int, A('c', '1'))
+
+    def test_reimport_shares_the_type(self):
+        saved = sys.modules.pop('array')
+        try:
+            again = __import__('array')
+            self.assertIsNot(again, array)
+            self.assertIs(again.array, A)
+            self.assertIs(again.ArrayType, A)
+            self.assertIs(reload(again), again)
+        finally:
+            sys.modules['array'] = saved
+
     def test_fromstring_refuses_its_own_items(self):
         target = A('c', 'ab')
         self.assert_error(ValueError, 'array.fromstring(x): x cannot be self', target.fromstring, target)
@@ -244,6 +373,36 @@ class ArrayAudit(unittest.TestCase):
         self.assert_error(TypeError, 'coercing to Unicode: need string or buffer, buffer found',
                           lambda: u'x' + view)
         self.assert_error(TypeError, 'char buffer type not available', 'axyb'.find, view)
+
+    def test_unicode_comparisons_decline_array_buffers(self):
+        # PyUnicode_RichCompare finds no character buffer in a buffer of an
+        # array and returns NotImplemented, so try_3way_compare calls the
+        # __cmp__ of a unicode subclass.
+        view = buffer(A('c', 'abc'))
+        class Text(unicode):
+            pass
+        for text in (u'abc', Text(u'abc')):
+            for name in ('__eq__', '__ne__', '__lt__', '__le__', '__gt__', '__ge__'):
+                self.assertIs(getattr(text, name)(view), NotImplemented)
+        self.assertEqual((u'abc'.__eq__(buffer('abc')), u'abc'.__eq__(buffer(u'abc'))), (True, True))
+        calls = []
+        class Ordered(unicode):
+            def __cmp__(self, other):
+                calls.append(type(other))
+                return 1
+        self.assertEqual((Ordered(u'abc') == view, Ordered(u'abc') < view, view < Ordered(u'abc'),
+                          cmp(Ordered(u'abc'), view), cmp(view, Ordered(u'abc'))), (False, False, True, 1, -1))
+        self.assertEqual(calls, [buffer] * 5)
+        class Failing(unicode):
+            def __cmp__(self, other):
+                raise KeyError('cmp')
+        self.assertRaises(KeyError, lambda: Failing(u'abc') == view)
+        class Equal(unicode):
+            def __cmp__(self, other):
+                return 0
+            __hash__ = unicode.__hash__
+        self.assertEqual(({Equal(u'abc'): 1}.get(view), view in [Equal(u'abc')], [Equal(u'abc')].index(view)), (1, True, 0))
+        self.assertEqual((u'abc' == view, u'abc' < view, cmp(u'abc', view)), (False, False, 1))
 
     def test_struct_reads_and_writes_items(self):
         doubles = A('d', [1.5, 2.5])

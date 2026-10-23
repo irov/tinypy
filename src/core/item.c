@@ -780,7 +780,8 @@ static tinypy_value_t *__tinypy_item_call_attribute(tinypy_value_t *container, t
 /* The sq_length slot behind a negative sequence offset: a classic instance
    always has it, and raises the AttributeError of a missing __len__.
    instance_length takes only an int or long result, slot_sq_length reads
-   any integer, and both refuse a negative length. */
+   any integer, and both refuse a negative length. The __len__ of
+   array.array wraps the slot of its type. */
 static int32_t __tinypy_item_sequence_length(tinypy_value_t *container, int64_t *out_length, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     tinypy_bool_t classic = TINYPY_VALUE_KIND(container) == TINYPY_VALUE_OLD_INSTANCE ? TINYPY_TRUE : TINYPY_FALSE;
@@ -789,7 +790,7 @@ static int32_t __tinypy_item_sequence_length(tinypy_value_t *container, int64_t 
     if (classic != 0) {
         length_value = __tinypy_item_call_attribute(container, vm->internal_special_length_key, NULL, 0U, out_error);
     }
-    else if (tinypy_internal_object_has_special_key(container, vm->internal_special_length_key) != 0) {
+    else if (container->type != vm->array_type && tinypy_internal_object_has_special_key(container, vm->internal_special_length_key) != 0) {
         length_value = __tinypy_item_call_method(container, vm->internal_special_length_key, NULL, 0U, out_error);
     }
     else {
@@ -865,7 +866,8 @@ tinypy_bool_t tinypy_internal_item_sequence_index(tinypy_value_t *container, int
 /* BaseException has only sq_item: PyObject_GetItem demands an index,
    PySequence_GetItem adds the length of a class defining __len__ to a
    negative one, and BaseException_getitem reads the item from the
-   arguments. */
+   arguments. An int key with an index from 0 runs no Python code that
+   could give the class a __getitem__. */
 static tinypy_value_t *__tinypy_item_exception_get(tinypy_value_t *container, tinypy_value_t *key, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     int64_t index;
@@ -881,15 +883,20 @@ static tinypy_value_t *__tinypy_item_exception_get(tinypy_value_t *container, ti
         if (tinypy_internal_item_sequence_index(container, &index, out_error) == 0) {
             return NULL;
         }
-        /* PySequence_GetItem reads sq_item after sq_length, so the
-           __getitem__ that a __len__ gave the class takes the index. */
-        if ((container->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && __tinypy_item_is_exception_sequence(container) == 0) {
-            tinypy_value_t *position = tinypy_integer_from_i64(vm, index);
-            tinypy_value_t *result = __tinypy_item_call_method(container, vm->internal_special_getitem_key, &position, 1U, out_error);
+    }
+    else if (TINYPY_VALUE_KIND(key) == TINYPY_VALUE_BOOL || TINYPY_VALUE_KIND(key) == TINYPY_VALUE_INTEGER) {
+        tinypy_value_t *direct = tinypy_internal_exception_get_item(container, index, out_error);
+        return direct;
+    }
+    /* PySequence_GetItem reads sq_item after the __index__ of the key and
+       the sq_length added to a negative index, so the __getitem__ that
+       either gave the class takes the index. */
+    if ((container->type->flags & TINYPY_TYPE_FLAG_HEAP) != 0U && __tinypy_item_is_exception_sequence(container) == 0) {
+        tinypy_value_t *position = tinypy_integer_from_i64(vm, index);
+        tinypy_value_t *result = __tinypy_item_call_method(container, vm->internal_special_getitem_key, &position, 1U, out_error);
 
-            TINYPY_DECREF(position);
-            return result;
-        }
+        TINYPY_DECREF(position);
+        return result;
     }
     tinypy_value_t *item = tinypy_internal_exception_get_item(container, index, out_error);
     return item;
@@ -1101,20 +1108,25 @@ static tinypy_value_t *__tinypy_item_offsets_slice(tinypy_vm_t *vm, int64_t star
 //////////////////////////////////////////////////////////////////////////
 /* sq_slice and sq_ass_slice: __getslice__ and its siblings receive the
    offsets; a classic instance without them passes a slice of the offsets to
-   __getitem__ and its siblings, as instance_slice does. */
-static tinypy_value_t *__tinypy_item_call_offset_values(tinypy_value_t *container, tinypy_value_t *slice_name, tinypy_value_t *item_name, int64_t low, int64_t high, tinypy_value_t *value, tinypy_error_t **out_error) {
+   __getitem__ and its siblings, as instance_slice does. pair_name is the
+   other method of sq_ass_slice. */
+static tinypy_value_t *__tinypy_item_call_offset_values(tinypy_value_t *container, tinypy_value_t *slice_name, tinypy_value_t *pair_name, tinypy_value_t *item_name, int64_t low, int64_t high, tinypy_value_t *value, tinypy_error_t **out_error) {
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     tinypy_value_t *items[3];
 
     /* instance_slice finds __getslice__ and its siblings like any attribute
        of a classic instance, __getattr__ included. */
     tinypy_value_t *method = NULL;
+    tinypy_value_t *kept = NULL;
     if (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_OLD_INSTANCE) {
         int32_t found = tinypy_internal_object_lookup_special_key(container, slice_name, &method, out_error);
 
         if (found < 0) {
             return NULL;
         }
+    }
+    else if (pair_name != NULL) {
+        kept = tinypy_internal_object_kept_slot_wrapper(container, slice_name, pair_name);
     }
     if (TINYPY_VALUE_KIND(container) != TINYPY_VALUE_OLD_INSTANCE || method != NULL) {
         items[0] = tinypy_integer_from_i64(vm, low);
@@ -1127,6 +1139,9 @@ static tinypy_value_t *__tinypy_item_call_offset_values(tinypy_value_t *containe
             result = tinypy_call(method, args, NULL, out_error);
             TINYPY_DECREF(args);
             TINYPY_DECREF(method);
+        }
+        else if (kept != NULL) {
+            result = tinypy_internal_native_function_call_method(kept, container, items, item_count, NULL, out_error);
         }
         else {
             result = __tinypy_item_call_method(container, slice_name, items, item_count, out_error);
@@ -1142,14 +1157,34 @@ static tinypy_value_t *__tinypy_item_call_offset_values(tinypy_value_t *containe
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_value_t *__tinypy_item_call_offsets(tinypy_value_t *container, tinypy_value_t *slice_name, tinypy_value_t *item_name, tinypy_value_t *start, tinypy_value_t *stop, tinypy_value_t *value, tinypy_error_t **out_error) {
+/* An array keeps array_slice and array_ass_slice while its type leaves the
+   legacy method of the slot to array.array. */
+static tinypy_bool_t __tinypy_item_array_slot(tinypy_value_t *container, tinypy_value_t *slice_name) {
+    if (container->type == TINYPY_VALUE_VM(container)->array_type) {
+        return TINYPY_TRUE;
+    }
+    tinypy_bool_t slot = tinypy_internal_array_check(container) != 0 && tinypy_internal_object_has_special_override_key(container, slice_name) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    return slot;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_item_call_offsets(tinypy_value_t *container, tinypy_value_t *slice_name, tinypy_value_t *pair_name, tinypy_value_t *item_name, tinypy_value_t *start, tinypy_value_t *stop, tinypy_value_t *value, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
     int64_t low;
     int64_t high;
 
     if (__tinypy_item_slice_offsets(container, start, stop, &low, &high, out_error) == 0) {
         return NULL;
     }
-    tinypy_value_t *result = __tinypy_item_call_offset_values(container, slice_name, item_name, low, high, value, out_error);
+    if (__tinypy_item_array_slot(container, slice_name) != 0) {
+        if (slice_name == vm->internal_special_getslice_key) {
+            tinypy_value_t *slice = tinypy_internal_array_slice(container, low, high, out_error);
+            return slice;
+        }
+        tinypy_bool_t assigned = tinypy_internal_array_assign_slice(container, low, high, value, out_error);
+        tinypy_value_t *none = assigned != 0 ? TINYPY_RET_NONE(vm) : NULL;
+        return none;
+    }
+    tinypy_value_t *result = __tinypy_item_call_offset_values(container, slice_name, pair_name, item_name, low, high, value, out_error);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1191,7 +1226,7 @@ tinypy_value_t *tinypy_internal_classic_slice_method(tinypy_value_t *function, t
     tinypy_value_t *item_name = name == vm->internal_special_getslice_key ? vm->internal_special_getitem_key
         : store != 0 ? vm->internal_special_setitem_key : vm->internal_special_delitem_key;
     tinypy_value_t *value = store != 0 ? TINYPY_TUPLE_GET(args, 3U) : NULL;
-    tinypy_value_t *result = __tinypy_item_call_offset_values(TINYPY_TUPLE_GET(args, 0U), name, item_name, bounds[0], bounds[1], value, out_error);
+    tinypy_value_t *result = __tinypy_item_call_offset_values(TINYPY_TUPLE_GET(args, 0U), name, NULL, item_name, bounds[0], bounds[1], value, out_error);
 
     if (result == NULL || name == vm->internal_special_getslice_key) {
         return result;
@@ -1214,10 +1249,10 @@ static tinypy_bool_t __tinypy_item_plain_bound(tinypy_vm_t *vm, tinypy_value_t *
 }
 //////////////////////////////////////////////////////////////////////////
 /* Whether apply_slice and assign_slice use sq_slice and sq_ass_slice: both
-   bounds must be offsets, and only classic instances and types with a
-   legacy method of the slot have it, which subclasses keep even when they
-   override __getitem__ and its siblings; pair_name is the other method of
-   sq_ass_slice. A built-in type other than buffer slices the same way
+   bounds must be offsets, and only classic instances, array.array and types
+   with a legacy method of the slot have it, which subclasses keep even when
+   they override __getitem__ and its siblings; pair_name is the other method
+   of sq_ass_slice. A built-in type other than buffer slices the same way
    without it; buffer_ass_slice refuses the read-only buffer only after the
    offsets are converted. */
 static TINYPY_ALWAYS_INLINE tinypy_bool_t __tinypy_item_uses_offsets(tinypy_value_t *container, tinypy_value_t *slice_name, tinypy_value_t *pair_name, tinypy_value_t *start, tinypy_value_t *stop) {
@@ -1227,7 +1262,7 @@ static TINYPY_ALWAYS_INLINE tinypy_bool_t __tinypy_item_uses_offsets(tinypy_valu
     if (__tinypy_item_is_slice_offset(start) == 0 || __tinypy_item_is_slice_offset(stop) == 0) {
         return TINYPY_FALSE;
     }
-    if (kind == TINYPY_VALUE_OLD_INSTANCE) {
+    if (kind == TINYPY_VALUE_OLD_INSTANCE || container->type == vm->array_type) {
         return TINYPY_TRUE;
     }
     if ((size_t)kind < TINYPY_BUILTIN_TYPE_COUNT && container->type == &vm->types[kind] && kind != TINYPY_VALUE_BUFFER) {
@@ -1257,7 +1292,7 @@ tinypy_value_t *tinypy_internal_get_slice(tinypy_value_t *container, tinypy_valu
     }
     /* buffer_slice selects what the subscript of a buffer selects. */
     if (kind != TINYPY_VALUE_BUFFER && __tinypy_item_uses_offsets(container, vm->internal_special_getslice_key, NULL, start, stop) != 0) {
-        tinypy_value_t *return_value_1 = __tinypy_item_call_offsets(container, vm->internal_special_getslice_key, vm->internal_special_getitem_key, start, stop, NULL, out_error);
+        tinypy_value_t *return_value_1 = __tinypy_item_call_offsets(container, vm->internal_special_getslice_key, NULL, vm->internal_special_getitem_key, start, stop, NULL, out_error);
         return return_value_1;
     }
     tinypy_value_t *slice = tinypy_slice_new(vm, start, stop, NULL);
@@ -1271,10 +1306,10 @@ tinypy_bool_t tinypy_internal_set_slice(tinypy_value_t *container, tinypy_value_
     tinypy_bool_t stored;
 
     /* list_ass_slice, also the slot of a list subclass that keeps
-       __setslice__, clamps the offsets only after collecting the
-       replacement, which may resize the list. */
+       __setslice__ or keeps the slot through __delslice__, clamps the offsets
+       only after collecting the replacement, which may resize the list. */
     if (TINYPY_VALUE_KIND(container) == TINYPY_VALUE_LIST && __tinypy_item_is_slice_offset(start) != 0 && __tinypy_item_is_slice_offset(stop) != 0
-        && tinypy_internal_object_has_special_override_key(container, vm->internal_special_setslice_key) == 0) {
+        && (tinypy_internal_object_has_special_override_key(container, vm->internal_special_setslice_key) == 0 || tinypy_internal_object_kept_slot_wrapper(container, vm->internal_special_setslice_key, vm->internal_special_delslice_key) != NULL)) {
         int64_t low;
         int64_t high;
 
@@ -1287,7 +1322,7 @@ tinypy_bool_t tinypy_internal_set_slice(tinypy_value_t *container, tinypy_value_
         return stored;
     }
     if (__tinypy_item_uses_offsets(container, vm->internal_special_setslice_key, vm->internal_special_delslice_key, start, stop) != 0) {
-        tinypy_value_t *result = __tinypy_item_call_offsets(container, vm->internal_special_setslice_key, vm->internal_special_setitem_key, start, stop, value, out_error);
+        tinypy_value_t *result = __tinypy_item_call_offsets(container, vm->internal_special_setslice_key, vm->internal_special_delslice_key, vm->internal_special_setitem_key, start, stop, value, out_error);
 
         if (result == NULL) {
             return TINYPY_FALSE;
@@ -1305,7 +1340,7 @@ tinypy_bool_t tinypy_internal_delete_slice(tinypy_value_t *container, tinypy_val
     tinypy_vm_t *vm = TINYPY_VALUE_VM(container);
 
     if (__tinypy_item_uses_offsets(container, vm->internal_special_delslice_key, vm->internal_special_setslice_key, start, stop) != 0) {
-        tinypy_value_t *result = __tinypy_item_call_offsets(container, vm->internal_special_delslice_key, vm->internal_special_delitem_key, start, stop, NULL, out_error);
+        tinypy_value_t *result = __tinypy_item_call_offsets(container, vm->internal_special_delslice_key, vm->internal_special_setslice_key, vm->internal_special_delitem_key, start, stop, NULL, out_error);
 
         if (result == NULL) {
             return TINYPY_FALSE;

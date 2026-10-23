@@ -1159,6 +1159,35 @@ class ObjectEvaluationDeep(unittest.TestCase):
         type.__delattr__(Owner, 'x')
         self.assertFalse(hasattr(Owner, 'x'))
 
+    def test_metaclass_holding_both_object_attribute_wrappers_assigns_generically(self):
+        class Generic(type):
+            __setattr__ = object.__setattr__
+            __delattr__ = object.__delattr__
+        class Derived(Generic):
+            pass
+        class Setter(type):
+            __setattr__ = object.__setattr__
+        class Deleter(type):
+            __delattr__ = object.__delattr__
+        for metaclass in (Generic, Derived):
+            owner = metaclass('Owner', (object,), {'z': 1})
+            owner.q = 1
+            del owner.z
+            self.assertEqual((owner.q, hasattr(owner, 'z')), (1, False))
+        setter = Setter('Setter', (object,), {'z': 1})
+        deleter = Deleter('Deleter', (object,), {'z': 1})
+        cases = (
+            (lambda: setattr(setter, 'q', 1), "can't apply this __setattr__ to type object"),
+            (lambda: delattr(deleter, 'z'), "can't apply this __delattr__ to type object"),
+        )
+        for function, message in cases:
+            with self.assertRaises(TypeError) as caught:
+                function()
+            self.assertEqual(str(caught.exception), message)
+        del setter.z
+        deleter.q = 1
+        self.assertEqual((hasattr(setter, 'z'), deleter.q), (False, 1))
+
     def test_object_new_requires_an_object_static_base(self):
         class Failure(ValueError):
             pass

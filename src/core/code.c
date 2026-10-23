@@ -688,15 +688,36 @@ static tinypy_bool_t __tinypy_code_constant_equal(tinypy_value_t *left, tinypy_v
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+/* code_richcompare compares the name, the integers, the bytecode, the
+   constants and then the name tuples, so an error of a later field is not
+   reached once an earlier one differs. */
 static tinypy_bool_t __tinypy_code_equal(tinypy_value_t *left_value, tinypy_value_t *right_value, tinypy_bool_t *out_equal, tinypy_error_t **out_error) {
     tinypy_code_object_t *left = TINYPY_CODE_OBJECT(left_value);
     tinypy_code_object_t *right = TINYPY_CODE_OBJECT(right_value);
-    tinypy_value_t *left_values[] = {left->name, left->bytecode, left->names, left->varnames, left->freevars, left->cellvars};
-    tinypy_value_t *right_values[] = {right->name, right->bytecode, right->names, right->varnames, right->freevars, right->cellvars};
+    tinypy_value_t *left_values[] = {left->names, left->varnames, left->freevars, left->cellvars};
+    tinypy_value_t *right_values[] = {right->names, right->varnames, right->freevars, right->cellvars};
     size_t index;
 
-    if (left->arg_count != right->arg_count || left->local_count != right->local_count || left->flags != right->flags || left->first_line_number != right->first_line_number) {
-        *out_equal = TINYPY_FALSE;
+    *out_equal = TINYPY_FALSE;
+    int32_t name_equal = tinypy_compare_bool(left->name, right->name, TINYPY_COMPARE_EQUAL, out_error);
+    if (name_equal < 0) {
+        return TINYPY_FALSE;
+    }
+    if (name_equal == 0 || left->arg_count != right->arg_count || left->local_count != right->local_count || left->flags != right->flags || left->first_line_number != right->first_line_number) {
+        return TINYPY_TRUE;
+    }
+    int32_t bytecode_equal = tinypy_compare_bool(left->bytecode, right->bytecode, TINYPY_COMPARE_EQUAL, out_error);
+    if (bytecode_equal < 0) {
+        return TINYPY_FALSE;
+    }
+    if (bytecode_equal == 0) {
+        return TINYPY_TRUE;
+    }
+    tinypy_bool_t consts_equal;
+    if (__tinypy_code_constant_equal(left->consts, right->consts, &consts_equal, out_error) == 0) {
+        return TINYPY_FALSE;
+    }
+    if (consts_equal == 0) {
         return TINYPY_TRUE;
     }
     for (index = 0U; index < sizeof(left_values) / sizeof(left_values[0]); ++index) {
@@ -706,12 +727,11 @@ static tinypy_bool_t __tinypy_code_equal(tinypy_value_t *left_value, tinypy_valu
             return TINYPY_FALSE;
         }
         if (equal == 0) {
-            *out_equal = TINYPY_FALSE;
             return TINYPY_TRUE;
         }
     }
-    tinypy_bool_t return_value_1 = __tinypy_code_constant_equal(left->consts, right->consts, out_equal, out_error);
-    return return_value_1;
+    *out_equal = TINYPY_TRUE;
+    return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
 /* code_compare orders the fields with PyObject_Compare. */

@@ -2686,9 +2686,46 @@ static tinypy_value_t *__tinypy_operator_binary_op1(const tinypy_operator_binary
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Whether a type defines one of the methods wrapping a sequence slot and
+   overrides none, once the dispatch memo has to learn it. */
+static TINYPY_NOINLINE tinypy_bool_t __tinypy_operator_memoize_sequence_slot(tinypy_value_t *value, uint64_t specials) {
+    tinypy_bool_t kept = __tinypy_internal_object_defines_dispatch(value, specials) != 0 && __tinypy_internal_object_overrides_dispatch(value, specials) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+
+    return kept;
+}
+//////////////////////////////////////////////////////////////////////////
 /* sq_concat, sq_inplace_concat, sq_repeat and sq_inplace_repeat survive in a
    subclass only while it leaves the methods wrapping them alone; a slot
    wrapper of another type in their place leaves the slot empty. */
+static TINYPY_ALWAYS_INLINE tinypy_bool_t __tinypy_operator_keeps_sequence_slot(tinypy_value_t *value, tinypy_operator_sequence_slot_e slot) {
+    static const uint64_t wrapping_specials[] = {
+        [TINYPY_OPERATOR_SEQUENCE_CONCAT] = TINYPY_INTERNAL_DISPATCH_BIT(ADD),
+        [TINYPY_OPERATOR_SEQUENCE_INPLACE_CONCAT] = TINYPY_INTERNAL_DISPATCH_BIT(IADD),
+        [TINYPY_OPERATOR_SEQUENCE_REPEAT] = TINYPY_INTERNAL_DISPATCH_BIT(MUL) | TINYPY_INTERNAL_DISPATCH_BIT(RMUL),
+        [TINYPY_OPERATOR_SEQUENCE_INPLACE_REPEAT] = TINYPY_INTERNAL_DISPATCH_BIT(IMUL),
+    };
+    uint64_t specials = wrapping_specials[slot];
+    const tinypy_type_t *type = value->type;
+
+    if (__tinypy_internal_object_known_dispatch(value, specials) == 0) {
+        tinypy_bool_t memoized = __tinypy_operator_memoize_sequence_slot(value, specials);
+        return memoized;
+    }
+    tinypy_bool_t kept = (type->dispatch_defines & specials) != 0U && (type->dispatch_overrides & specials) == 0U ? TINYPY_TRUE : TINYPY_FALSE;
+    return kept;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The native instances with sequence slots are arrays. Only Python classes
+   derive from array.array, so a host native type needs no MRO walk, and the
+   test stays out of line for the built-in sequences. */
+static TINYPY_NOINLINE tinypy_bool_t __tinypy_operator_array_has_sequence_slot(tinypy_value_t *value, tinypy_operator_sequence_slot_e slot) {
+    if (value->type != TINYPY_VALUE_VM(value)->array_type && ((value->type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) == 0U || tinypy_internal_array_check(value) == TINYPY_FALSE)) {
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t kept = __tinypy_operator_keeps_sequence_slot(value, slot);
+    return kept;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_operator_has_sequence_slot(tinypy_value_t *value, tinypy_operator_sequence_slot_e slot) {
     tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
     tinypy_bool_t inplace = slot == TINYPY_OPERATOR_SEQUENCE_INPLACE_CONCAT || slot == TINYPY_OPERATOR_SEQUENCE_INPLACE_REPEAT ? TINYPY_TRUE : TINYPY_FALSE;
@@ -2697,11 +2734,10 @@ static tinypy_bool_t __tinypy_operator_has_sequence_slot(tinypy_value_t *value, 
     case TINYPY_VALUE_LIST:
     case TINYPY_VALUE_BYTEARRAY:
         break;
-    case TINYPY_VALUE_NATIVE_INSTANCE:
-        if (tinypy_internal_array_check(value) == TINYPY_FALSE) {
-            return TINYPY_FALSE;
-        }
-        break;
+    case TINYPY_VALUE_NATIVE_INSTANCE: {
+        tinypy_bool_t array = __tinypy_operator_array_has_sequence_slot(value, slot);
+        return array;
+    }
     case TINYPY_VALUE_STRING:
     case TINYPY_VALUE_UNICODE:
     case TINYPY_VALUE_TUPLE:
@@ -2716,14 +2752,7 @@ static tinypy_bool_t __tinypy_operator_has_sequence_slot(tinypy_value_t *value, 
     if (__tinypy_operator_is_exact_builtin(value) != 0) {
         return TINYPY_TRUE;
     }
-    static const uint64_t wrapping_specials[] = {
-        [TINYPY_OPERATOR_SEQUENCE_CONCAT] = TINYPY_INTERNAL_DISPATCH_BIT(ADD),
-        [TINYPY_OPERATOR_SEQUENCE_INPLACE_CONCAT] = TINYPY_INTERNAL_DISPATCH_BIT(IADD),
-        [TINYPY_OPERATOR_SEQUENCE_REPEAT] = TINYPY_INTERNAL_DISPATCH_BIT(MUL) | TINYPY_INTERNAL_DISPATCH_BIT(RMUL),
-        [TINYPY_OPERATOR_SEQUENCE_INPLACE_REPEAT] = TINYPY_INTERNAL_DISPATCH_BIT(IMUL),
-    };
-    uint64_t specials = wrapping_specials[slot];
-    tinypy_bool_t kept = __tinypy_internal_object_defines_dispatch(value, specials) != 0 && __tinypy_internal_object_overrides_dispatch(value, specials) == 0 ? TINYPY_TRUE : TINYPY_FALSE;
+    tinypy_bool_t kept = __tinypy_operator_keeps_sequence_slot(value, slot);
     return kept;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -2768,12 +2797,6 @@ static tinypy_value_t *__tinypy_operator_sequence_concat(tinypy_value_t *sequenc
 
         return extended;
     }
-    /* The native instances with sequence slots are arrays. */
-    if (kind == TINYPY_VALUE_NATIVE_INSTANCE) {
-        tinypy_value_t *concatenated = tinypy_internal_array_concat(sequence, other, inplace, out_error);
-
-        return concatenated;
-    }
     /* bytearray and buffer concatenation are their types' own methods. */
     if (kind == TINYPY_VALUE_BYTEARRAY || kind == TINYPY_VALUE_BUFFER) {
         tinypy_value_t *method_name = inplace != 0 ? vm->internal_special_iadd_key : vm->internal_special_add_key;
@@ -2809,6 +2832,12 @@ static tinypy_value_t *__tinypy_operator_sequence_concat(tinypy_value_t *sequenc
     if ((kind == TINYPY_VALUE_TUPLE || kind == TINYPY_VALUE_LIST) && other_kind == kind) {
         tinypy_value_t *items = __tinypy_operator_concat_sequence(vm, sequence, other, out_error);
         return items;
+    }
+    /* The native instances with sequence slots are arrays. */
+    if (kind == TINYPY_VALUE_NATIVE_INSTANCE) {
+        tinypy_value_t *concatenated = tinypy_internal_array_concat(sequence, other, inplace, out_error);
+
+        return concatenated;
     }
     if (kind == TINYPY_VALUE_STRING) {
         const tinypy_message_part_t parts[] = {
@@ -3031,6 +3060,24 @@ static tinypy_value_t *__tinypy_operator_binary(const tinypy_operator_binary_spe
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+/* update_one_slot takes the inherited __iadd__ wrapper of list, bytearray
+   and array.array for nb_inplace_add of a subclass that keeps it, so their
+   in-place concatenation runs before any binary method there. Only Python
+   classes derive from them: the flags rule out host native types, and an
+   MRO walk tells an array from another native instance last. */
+static TINYPY_ALWAYS_INLINE tinypy_bool_t __tinypy_operator_inherits_inplace_concat(tinypy_value_t *value) {
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(value);
+
+    if ((value->type->flags & TINYPY_TYPE_FLAG_PYTHON_HEAP) == 0U || (kind != TINYPY_VALUE_LIST && kind != TINYPY_VALUE_BYTEARRAY && kind != TINYPY_VALUE_NATIVE_INSTANCE)) {
+        return TINYPY_FALSE;
+    }
+    if (__tinypy_internal_object_defines_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(IADD)) == 0) {
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t inherited = kind != TINYPY_VALUE_NATIVE_INSTANCE || tinypy_internal_array_check(value) != TINYPY_FALSE ? TINYPY_TRUE : TINYPY_FALSE;
+    return inherited;
+}
+//////////////////////////////////////////////////////////////////////////
 /* The nb_inplace_* slot of the left operand's type: instance_i* of classic
    instances, slot_nb_inplace_* of a Python method, a C-API slot or the
    in-place set methods. */
@@ -3047,12 +3094,7 @@ static tinypy_operator_slot_e __tinypy_operator_inplace_slot(const tinypy_operat
         if (__tinypy_operator_native_slot(value->type, spec->native_inplace_offset) != NULL) {
             return TINYPY_OPERATOR_SLOT_NATIVE;
         }
-        /* update_one_slot takes the inherited __iadd__ wrapper of list,
-           bytearray and array.array for nb_inplace_add of a subclass that
-           keeps it, so their in-place concatenation runs before any binary
-           method there. */
-        tinypy_bool_t array_subclass = kind == TINYPY_VALUE_NATIVE_INSTANCE && value->type != TINYPY_VALUE_VM(value)->array_type && tinypy_internal_array_check(value) != TINYPY_FALSE ? TINYPY_TRUE : TINYPY_FALSE;
-        if (spec->operation == TINYPY_OPERATOR_BINARY_ADD && (kind == TINYPY_VALUE_LIST || kind == TINYPY_VALUE_BYTEARRAY || array_subclass != TINYPY_FALSE) && __tinypy_internal_object_defines_dispatch(value, TINYPY_INTERNAL_DISPATCH_BIT(IADD)) != 0) {
+        if (spec->operation == TINYPY_OPERATOR_BINARY_ADD && __tinypy_operator_inherits_inplace_concat(value) != 0) {
             return TINYPY_OPERATOR_SLOT_METHOD;
         }
     }

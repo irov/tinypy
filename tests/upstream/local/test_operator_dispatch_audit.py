@@ -463,6 +463,70 @@ class OperatorDispatchAudit(unittest.TestCase):
             __or__ = int.__or__
         self.assertEqual(Merged([1]) | set([2]), set([1, 2]))
 
+    def test_foreign_slot_wrapper_keeps_the_slot_of_an_array(self):
+        from array import array
+        class Repeated(array):
+            __mul__ = list.__mul__
+        class Reflected(array):
+            __rmul__ = bytearray.__rmul__
+        class Stored(array):
+            __setitem__ = list.__setitem__
+        class Deleted(array):
+            __delitem__ = dict.__delitem__
+        self.assertEqual((Repeated('b', [1, 2]) * 2, 2 * Reflected('b', [1])), (array('b', [1, 2, 1, 2]), array('b', [1, 1])))
+        self.assertEqual(_failure(lambda: Repeated.__mul__(Repeated('b'), 2))[0], 'TypeError')
+        stored, deleted = Stored('b', [1, 2]), Deleted('b', [1, 2])
+        stored[0] = 5
+        stored[1::2] = array('b', [6])
+        del deleted[0]
+        self.assertEqual((stored, deleted), (array('b', [5, 6]), array('b', [2])))
+        class Joined(array):
+            __add__ = bytearray.__add__
+        class Grown(array):
+            __iadd__ = bytearray.__iadd__
+            __imul__ = bytearray.__imul__
+        class Both(array):
+            __mul__ = list.__mul__
+            __rmul__ = list.__rmul__
+        self.assertEqual(_failure(lambda: Joined('b', [1]) + array('b', [2])), ('TypeError', "unsupported operand type(s) for +: 'Joined' and 'array.array'"))
+        self.assertEqual(_failure(lambda: Both('b', [1]) * 2), ('TypeError', "unsupported operand type(s) for *: 'Both' and 'int'"))
+        grown = first = Grown('b', [1])
+        grown += array('b', [2])
+        grown *= 2
+        self.assertEqual((type(grown), grown is first, grown), (array, False, array('b', [1, 2, 1, 2])))
+
+    def test_foreign_slice_wrapper_keeps_the_slot_through_its_pair(self):
+        from array import array
+        def assign(sequence, value):
+            sequence[-2:-1] = value
+            return sequence
+        def delete(sequence):
+            del sequence[0:1]
+            return sequence
+        class Items(list):
+            __setslice__ = buffer.__setslice__
+        class Removed(list):
+            __delslice__ = buffer.__delslice__
+        class Codes(array):
+            __setslice__ = buffer.__setslice__
+        class Erased(array):
+            __delslice__ = list.__delslice__
+        self.assertEqual((assign(Items([1, 2, 3]), [7, 8]), delete(Items([1, 2])), delete(Removed([1, 2]))), ([1, 7, 8, 3], [2], [2]))
+        self.assertEqual((assign(Codes('b', [1, 2, 3]), array('b', [7])), delete(Codes('b', [1, 2])), delete(Erased('b', [1, 2]))), (array('b', [1, 7, 3]), array('b', [2]), array('b', [2])))
+        self.assertEqual(_failure(lambda: assign(Codes('b', [1, 2]), [7])), ('TypeError', 'can only assign array (not "list") to array slice'))
+        self.assertEqual(_failure(lambda: Items.__setslice__(Items([1]), 0, 1, [2]))[0], 'TypeError')
+        class Both(list):
+            __setslice__ = buffer.__setslice__
+            __delslice__ = buffer.__delslice__
+        class Python(array):
+            __setslice__ = buffer.__setslice__
+            def __delslice__(self, low, high):
+                raise KeyError(low, high)
+        self.assertEqual(_failure(lambda: assign(Both([1, 2]), [3]))[0], 'TypeError')
+        self.assertEqual(_failure(lambda: delete(Both([1, 2])))[0], 'TypeError')
+        self.assertEqual(_failure(lambda: assign(Python('b', [1, 2]), array('b')))[0], 'TypeError')
+        self.assertEqual(_failure(lambda: delete(Python('b', [1, 2]))), ('KeyError', '(0, 1)'))
+
     def test_foreign_iter_wrapper_falls_back_to_the_sequence_protocol(self):
         class Mapping(dict):
             __iter__ = list.__iter__

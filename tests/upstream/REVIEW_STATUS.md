@@ -133,7 +133,9 @@ generic lookup before a `__getattr__` hook, the TypeError of a missing
 `__len__` in a length hint (`list()`, `tuple()`, `sorted()` or a join of a
 generator, `enumerate`, `reversed`, a call or list iterator), the IndexError
 ending a str, unicode or buffer iterator, and the `__trunc__` probe of `int()`
-and `long()` over text. Dict ordering reads a failed key comparison of the other
+and `long()` over text; and a negative `__len__` of a later `map` operand
+replaces the pending hint error with its ValueError, which `slot_sq_length`
+raises only without a pending exception. Dict ordering reads a failed key comparison of the other
 dictionary as a missing key, as `PyDict_GetItem` does; cells and code objects order their contents
 with the three-way comparison, which `cmp()` calls directly as their
 `tp_compare`; and code equality compares constants by `_PyCode_ConstantKey`:
@@ -165,6 +167,22 @@ attribute load or a classic lookup still moves it, since only a failed probe
 steps back over the raise of the error it clears. The builtin error handlers
 report a deleted `object` of a UnicodeError as not set.
 
+In the sixteenth pass an exception subscript reads the `__getitem__` of the
+class again after the `__index__` of a key that is no int, as
+`PySequence_GetItem` reads `sq_item` after `PyNumber_AsSsize_t`. Code equality
+compares the fields in the order of `code_richcompare` (name, integers,
+bytecode, constants, name tuples), so the error of a field `__eq__` surfaces
+whenever CPython reaches it. A metaclass holding both `object.__setattr__`
+and `object.__delattr__` assigns and deletes the attributes of its types
+without the check of those wrappers, as the `PyObject_GenericSetAttr` that
+`update_one_slot` installs for it does; tinypy keeps its lookup caches and
+dispatch current then, where CPython skips `PyType_Modified` and
+`update_slot` and can keep serving a replaced method or a deleted attribute
+from its method cache. Python subclasses of a host native type keep the
+object-slot overrides and the mapping callback they copied after
+`tinypy_native_type_update_spec` removes those callbacks from the type
+(`core_native_special_lookups`).
+
 In the fifteenth pass the bundled `array` module follows `arraymodule.c` of
 CPython 2.7.18, so the BIGCHARSET encoding of `sre_compile` (a unicode class
 with more than two runs outside Latin-1) compiles. Its item sizes are those
@@ -184,6 +202,39 @@ when read, file methods always refuse their file, and `_sre` refuses an
 array subject. Covered by `array_matrix.py` (12,795 outcomes),
 `local.test_array_audit`, `cli_runtime_array_runtime` and
 `runtime_array_heap_budget`.
+
+In the sixteenth pass the rich comparisons of unicode return NotImplemented
+for a buffer of an array, as `PyUnicode_RichCompare` does when it finds no
+character buffer, so the `__cmp__` of a unicode subclass orders the pair;
+`tinypy_buffer_from_object` refuses an object without the old buffer protocol
+with TypeError, as `PyBuffer_FromObject` does; and `_struct.pack_into` names
+None and refuses unicode as the `w*` conversion does. Covered by
+`local.test_array_audit`, `local.test_struct_arguments_audit` and
+`core_buffer_unsupported_owner`.
+
+In the sixteenth pass simple slices of an array, or of a subclass that
+leaves the legacy slice methods alone, call `array_slice` and
+`array_ass_slice` with offsets adjusted by the length its `__len__` gives,
+as `apply_slice` and `assign_slice` do, instead of calling `__getslice__`
+and its siblings by name, and those methods pass their offsets on unchanged.
+Extended slices whose step nears `sys.maxsize` stop at their last item, a
+slice assignment of an array to itself reads the slice again as
+`array_ass_subscr` does, `*=` by a count of at most zero frees the items,
+`compile()` reads an array source through the old buffer protocol, and the
+module is created by its first import. `fromstring` of an empty array
+itself is refused only while the array holds storage; CPython 2.7 also
+allocates storage when an empty array is extended by an empty array or loses
+an empty extended slice. Covered by `local.test_array_audit` and
+`cli_runtime_array_runtime`.
+
+In the sixteenth pass the `PyImport_Import` of `copy_reg` and `re` replaces
+any failure of the item lookup of `__import__` in a dictionary
+`__builtins__` with KeyError('__import__') and releases the diagnostic it
+replaces. `Pattern.sub` and `subn` hand every replacement but a callable or
+a string or buffer without a backslash to `re._subx`, an array too since
+`_sre` reads none, and insert a result that is not callable as it is,
+skipping None. Covered by `local.test_object_protocols` and
+`local.test_sre_deep`.
 
 ASCII and UTF-8 decoding consult registered handlers for every policy name,
 including default strict. ASCII/Latin-1 encoding retains its four builtin
@@ -711,11 +762,15 @@ These are explicit scope decisions, rather than pending implementation items:
   does when another name of that slot still finds the wrapper of the base:
   the other operand of a binary operator, the other rich comparisons, item
   or attribute assignment with deletion, since the eleventh pass in
-  subclasses of exceptions and native types too. Such a wrapper under a name
-  of `sq_concat`, `sq_repeat` or their in-place forms in a subclass of a
-  built-in sequence fills no slot of that name, as those slots have no
-  method of their own: the operator reports unsupported operands or tries
-  the reflected method, and `+=` falls back to concatenation. The rule
+  subclasses of exceptions and native types too. Since the sixteenth pass
+  the rule judges a subclass of `array.array` by the wrappers of array, as
+  the slots it keeps are array's, and `__setslice__` with `__delslice__`
+  keep the `sq_ass_slice` of a list or array the same way. Such a wrapper
+  under a name of `sq_concat`, `sq_repeat` or their in-place forms in a
+  subclass of a built-in sequence or `array.array` fills no slot of that
+  name, as those slots have no method of their own: the operator reports
+  unsupported operands or tries the reflected method, and `+=` falls back
+  to concatenation. The rule
   judges by the built-in base, not by the slots an intermediate Python class
   left. Built-in types hold the wrappers of their own slots only, so a
   wrapper that CPython gives a type for an inherited `tp_getattro`, such as

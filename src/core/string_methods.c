@@ -5570,8 +5570,9 @@ static tinypy_bool_t __tinypy_percent_is_mapping(tinypy_value_t *value) {
     if (kind == TINYPY_VALUE_TUPLE || kind == TINYPY_VALUE_STRING || kind == TINYPY_VALUE_UNICODE) {
         return TINYPY_FALSE;
     }
-    tinypy_value_t *getitem = __tinypy_internal_object_mapping_getitem(vm, value);
-    if (getitem == NULL || getitem == tinypy_internal_type_lookup_key(vm, &vm->types[TINYPY_VALUE_XRANGE], key) || getitem == tinypy_internal_type_lookup_key(vm, vm->exception_types[TINYPY_EXCEPTION_BASE], key)) {
+    tinypy_value_t *getitem;
+    tinypy_bool_t mapping = __tinypy_internal_object_mapping_getitem(vm, value, &getitem);
+    if (mapping == 0 || getitem == tinypy_internal_type_lookup_key(vm, &vm->types[TINYPY_VALUE_XRANGE], key) || getitem == tinypy_internal_type_lookup_key(vm, vm->exception_types[TINYPY_EXCEPTION_BASE], key)) {
         return TINYPY_FALSE;
     }
     return TINYPY_TRUE;

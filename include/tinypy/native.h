@@ -60,9 +60,11 @@ typedef tinypy_value_t *(*tinypy_native_compare_t)(tinypy_value_t *instance, voi
  * type, and every deletion with a NULL value, as mapping_set receives the
  * deletion of an item; object.__setattr__ and object.__delattr__ stay
  * generic. An attribute of object that the dictionary of a Python subclass
- * or of its Python base holds, as __getattribute__ = object.__getattribute__,
- * overrides the slot that the spec replaced: as update_one_slot, the slot is
- * object's again, and with __getattr__ the generic lookup runs first.
+ * or of its Python base ahead of the type holds, as __getattribute__ =
+ * object.__getattribute__, overrides the slot of the callback the subclass
+ * copied, also after an update removed that callback from the type: as
+ * update_one_slot, the slot is object's again, and with __getattr__ the
+ * generic lookup runs first.
  * As add_operators names the slots of a C type, the type publishes a slot
  * wrapper for each callback of its spec under the name of its special
  * method, __setattr__ and __delattr__ for set_attribute, __lt__ to __ge__
@@ -76,7 +78,8 @@ typedef tinypy_value_t *(*tinypy_native_compare_t)(tinypy_value_t *instance, voi
  * found under its own name as the slot of their type when the type runs the
  * same callback with the same user data, as the type itself or a Python
  * subclass that copied its spec, which keeps the slot of a callback it copied
- * after an update replaced that callback of its base, for '%' and eval too.
+ * after an update replaced or removed that callback of its base, for '%' and
+ * eval too.
  * The wrapper of a host native base whose
  * callback the type, or the host native type a Python class copied its spec
  * from, does not dispatch reads as the attribute of the nearest base of that

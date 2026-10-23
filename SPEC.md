@@ -123,11 +123,18 @@ Runtime allocations размером до 512 bytes обслуживает VM-lo
   последней в этом порядке: как в CPython 3.9, одна полностью свободная arena
   остаётся для повторного использования и освобождается не позже уничтожения
   VM, а при заданном `max_heap_bytes` не остаётся ни одной;
-- опустевший pool, единственный используемый pool своего size class, остаётся
-  в использовании (вместе с ним и его arena): иначе цикл, который выделяет и
-  освобождает block класса, чьи остальные pools заполнены, брал бы pool из
-  arena и возвращал его на каждом проходе; такой pool возвращается в arena не
-  позже уничтожения VM, а при заданном `max_heap_bytes` сразу;
+- опустевший pool остаётся в использовании, если у его size class нет другого
+  пустого pool: иначе цикл, который выделяет и освобождает blocks на краю
+  pools класса, брал бы pool из arena и возвращал его на каждом проходе.
+  Поэтому пустых pools не больше одного на size class, то есть не больше
+  512 bytes / native alignment на VM (256 KiB при alignment 8, 128 KiB при
+  16), и такой pool остаётся, только пока в его arena есть используемый pool,
+  который не оставлен так же: arena, где остались одни такие pools, получает
+  их обратно и дальше следует правилу полностью свободной arena. Они не
+  удерживают ни одной arena: после освобождения объектов host allocator
+  держит только arenas с живыми blocks и одну полностью свободную arena.
+  Такие pools возвращаются в arena не позже уничтожения VM, а при заданном
+  `max_heap_bytes` сразу, как и оставшиеся от bootstrap VM;
 - allocations больше 512 bytes передаются host allocator напрямую.
 
 Pool state принадлежит конкретной `tinypy_vm_t`; process globals, TLS и locks
@@ -151,7 +158,9 @@ Bootstrap VM выполняется целиком и только затем с
 занятая им память больше `max_heap_bytes`, `tinypy_vm_create` освобождает всё
 и возвращает NULL. Так же она поступает, если host allocator вернул NULL на
 сам объект VM или на запрос bootstrap, после которого bootstrap продолжается;
-остальные запросы bootstrap подчиняются общему правилу non-NULL. Функции C API
+остальные запросы bootstrap подчиняются общему правилу non-NULL. Как bootstrap,
+без проверки budget, первый импорт `array` создаёт тип и namespace модуля.
+Функции C API
 без error result, например `tinypy_dict_set` и `tinypy_list_append`, не
 являются fallible: их рост игнорирует budget и всегда завершается. Compiler
 и runtime при исчерпании budget сообщают `MemoryError`, не теряя данных.
@@ -332,7 +341,10 @@ Legacy `buffer` хранит запрошенные offset и size, а дост�
 теряют исходные bounds; nested views удерживают общий root owner. Первый hash
 кешируется. Raw Unicode buffer содержит native code units, которые первый
 buffer кеширует на unicode owner; если память под них отклонена,
-`tinypy_buffer_from_object` возвращает NULL с поднятым `MemoryError`.
+`tinypy_buffer_from_object` возвращает NULL с поднятым `MemoryError`. Owner,
+отличный от str, unicode, bytearray, `array.array` и buffer,
+`tinypy_buffer_from_object` отклоняет, как `PyBuffer_FromObject`: возвращает
+NULL с поднятым `TypeError: buffer object expected`.
 Character-buffer conversion использует default encoding и отдельно применяет
 bounds к этим байтам, удерживая owner во время codec callbacks. Offset и size
 больше `PTRDIFF_MAX` (возможны только на 32-битных hosts) хранятся как
@@ -647,7 +659,10 @@ Python-visible bundled surface намеренно ограничен memory-only
 - `_sre` исполняет Python 2.7 regex programs; `_sre.compile` проверяет program
   как `_validate` Python 2.7 и отклоняет любую другую с
   `RuntimeError("invalid SRE code")`; разбор replacement templates и
-  `Match.expand` используют `re._subx` и `re._expand`, предоставленные host;
+  `Match.expand` используют `re._subx` и `re._expand`, предоставленные host:
+  `sub` и `subn` передают `re._subx` любой replacement, кроме callable и
+  строки или buffer без обратной косой черты, и вставляют не-callable
+  результат как есть, а `None` удаляет совпадение;
   `re` импортируется так же, как `copy_reg` для `object.__reduce_ex__`.
   `groupindex` и `indexgroup` могут быть любыми объектами: имя группы ищется
   subscription `groupindex`, `groupdict` перечисляет имена через его `keys()`,
@@ -695,7 +710,18 @@ Python-visible bundled surface намеренно ограничен memory-only
   на 32-битных hosts, а память элементов выделяется с учётом
   `max_heap_bytes` и при отказе даёт `MemoryError`. `arrayiterator`, как в
   CPython, держит массив и после исчерпания видит добавленные элементы.
-  `_sre` не принимает array как subject;
+  `_sre` не принимает array как subject, а array как replacement передаёт
+  `re._subx`. Модуль создаётся при первом импорте, до которого его, как
+  модуля расширения CPython, нет в `sys.modules`; тип `array.array` живёт до уничтожения VM, а импорт после
+  удаления модуля из `sys.modules` копирует сохранённый namespace, как
+  `_PyImport_FindExtension`. Тип и namespace, как bootstrap VM, выделяются
+  без проверки `max_heap_bytes`. `fromstring` отвергает сам массив или его
+  `buffer()`, пока у массива есть память элементов: её сохраняет массив,
+  опустевший после удалений, но не новый массив и не массив после `*=` на
+  число не больше нуля, которое, как в CPython, освобождает элементы.
+  Расширение пустого массива пустым array и удаление пустого extended slice
+  памяти не выделяют; CPython 2.7 выделяет её и затем отвергает такой
+  массив;
 - filesystem-backed standard library, source-encoding discovery, process
   metadata, environment-dependent `sys` paths и standard I/O input не
   эмулируются. Их предоставляет host либо импортированный memory artifact.
@@ -793,8 +819,9 @@ callback spec опубликовавшего его типа, так что Pyth
 типа, если тип вызывает тот же callback с той же user data — это сам тип или
 Python-подкласс, скопировавший его spec; такой slot ничего не переопределяет.
 Python-подкласс, чья скопированная spec задаёт callback этого slot, сохраняет
-его и после того, как обновление spec базы заменило callback: wrapper базы
-читается как его slot, в том числе для `%` и `eval`/`exec`.
+его и после того, как обновление spec базы заменило или убрало callback:
+wrapper базы читается как его slot, а скопированный `mapping_get` и без
+wrapper оставляет экземпляры mapping, в том числе для `%` и `eval`/`exec`.
 Wrapper host native базы, callback которой тип (или host native type, чью spec
 скопировал Python-класс) не вызывает, читается как атрибут ближайшей базы
 этого типа, не являющейся host native type. Любой другой wrapper — под другим
@@ -806,10 +833,12 @@ Wrapper host native базы, callback которой тип (или host native
 удаление с NULL значением, как `mapping_set` получает удаление элемента, а
 `object.__setattr__` и `object.__delattr__` остаются generic и callback не
 вызывают. Атрибут `object`, который держит словарь Python-подкласса или его
-Python-базы, например `__getattribute__ = object.__getattribute__`,
-переопределяет slot, который host native база заменила callback своей spec:
-как `update_one_slot`, slot снова становится slot `object`, а с `__getattr__`
-generic lookup выполняется раньше hook. Базы `tinypy_native_type_new` сохраняют раскладку
+Python-базы, стоящей в MRO раньше host native базы, например
+`__getattribute__ = object.__getattribute__`, переопределяет slot
+скопированного подклассом callback spec, в том числе после того, как
+обновление spec убрало этот callback у базы: как `update_one_slot`, slot снова
+становится slot `object`, а с `__getattr__` generic lookup выполняется раньше
+hook. Базы `tinypy_native_type_new` сохраняют раскладку
 `object` или host native type; база со встроенной раскладкой, например `list`
 или исключение, отвергается с TypeError «native type base '…' has an
 incompatible instance layout». Присваивание `__class__` и `__bases__` не

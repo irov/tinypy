@@ -187,6 +187,7 @@ static tinypy_pool_arena_t *__tinypy_pool_new_arena(tinypy_vm_t *vm, tinypy_bool
     arena->pool_address = (tinypy_pool_block_t *)aligned_address;
     arena->free_pool_count = (uint32_t)((TINYPY_INTERNAL_POOL_ARENA_SIZE - excess) / TINYPY_INTERNAL_POOL_SIZE);
     arena->total_pool_count = arena->free_pool_count;
+    arena->kept_pool_count = 0U;
     arena->free_pools = NULL;
     arena->next_arena = NULL;
     arena->previous_arena = NULL;
@@ -237,6 +238,7 @@ static void __tinypy_pool_release_arena(tinypy_vm_t *vm, tinypy_pool_arena_t *ar
     arena->pool_address = NULL;
     arena->free_pool_count = 0U;
     arena->total_pool_count = 0U;
+    arena->kept_pool_count = 0U;
     arena->free_pools = NULL;
     allocator->active_arena_count -= 1U;
     __tinypy_pool_raw_deallocate(vm, memory, TINYPY_INTERNAL_POOL_ARENA_SIZE, TINYPY_INTERNAL_ALIGNMENT);
@@ -297,6 +299,52 @@ static void __tinypy_pool_release_pool(tinypy_vm_t *vm, tinypy_pool_t *pool) {
     __tinypy_pool_slide_usable_arena(allocator, arena);
 }
 //////////////////////////////////////////////////////////////////////////
+/* A kept pool stops being kept; an empty one goes back to its arena. */
+static void __tinypy_pool_drop_kept_pool(tinypy_vm_t *vm, tinypy_pool_t *pool) {
+    tinypy_pool_allocator_t *allocator = &vm->pool_allocator;
+
+    allocator->kept_pools[pool->size_class] = NULL;
+    allocator->arenas[pool->arena_index].kept_pool_count -= 1U;
+    if (pool->ref == 0U) {
+        __tinypy_pool_release_pool(vm, pool);
+    }
+}
+//////////////////////////////////////////////////////////////////////////
+/* An emptied pool stays in use as the kept pool of its size class when the
+   class keeps no other empty pool: a loop that allocates and frees blocks at
+   the end of the pools of a class would otherwise take a pool from an arena
+   and give it back on every pass. Kept pools stay only while their arena
+   holds a used pool that is not kept, so they never keep an arena from the
+   host; under a heap budget no pool is kept. */
+static TINYPY_NOINLINE void __tinypy_pool_empty_pool(tinypy_vm_t *vm, tinypy_pool_t *pool) {
+    uint32_t size_class;
+
+    tinypy_pool_allocator_t *allocator = &vm->pool_allocator;
+    uint32_t arena_index = pool->arena_index;
+    tinypy_pool_arena_t *arena = &allocator->arenas[arena_index];
+    tinypy_pool_t *kept_pool = allocator->kept_pools[pool->size_class];
+    if (vm->max_heap_bytes == 0U && (kept_pool == NULL || kept_pool->ref != 0U)) {
+        /* The kept pool of the class, if any, is in use again. */
+        if (kept_pool != NULL) {
+            __tinypy_pool_drop_kept_pool(vm, kept_pool);
+        }
+        allocator->kept_pools[pool->size_class] = pool;
+        arena->kept_pool_count += 1U;
+    }
+    else {
+        __tinypy_pool_release_pool(vm, pool);
+    }
+    if (arena->kept_pool_count == 0U || arena->free_pool_count + arena->kept_pool_count != arena->total_pool_count) {
+        return;
+    }
+    for (size_class = 0U; size_class < TINYPY_INTERNAL_POOL_CLASS_COUNT; ++size_class) {
+        kept_pool = allocator->kept_pools[size_class];
+        if (kept_pool != NULL && kept_pool->arena_index == arena_index) {
+            __tinypy_pool_drop_kept_pool(vm, kept_pool);
+        }
+    }
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_internal_pool_initialize(tinypy_vm_t *vm) {
     uint32_t size_class;
 
@@ -312,7 +360,7 @@ void tinypy_internal_pool_initialize(tinypy_vm_t *vm) {
     }
 }
 //////////////////////////////////////////////////////////////////////////
-void tinypy_internal_pool_finalize(tinypy_vm_t *vm) {
+void tinypy_internal_pool_trim(tinypy_vm_t *vm) {
     uint32_t size_class;
 
     tinypy_pool_allocator_t *allocator = &vm->pool_allocator;
@@ -323,18 +371,12 @@ void tinypy_internal_pool_finalize(tinypy_vm_t *vm) {
         __tinypy_pool_raw_deallocate(vm, allocation, allocation->size, TINYPY_INTERNAL_ALIGNMENT);
     }
     allocator->cached_allocation_bytes = 0U;
-    /* The empty pools that deallocation keeps in use. */
+    /* The pools that deallocation keeps. */
     for (size_class = 0U; size_class < TINYPY_INTERNAL_POOL_CLASS_COUNT; ++size_class) {
-        tinypy_pool_t *head = &allocator->used_pools[size_class];
-        tinypy_pool_t *pool = head->next_pool;
+        tinypy_pool_t *pool = allocator->kept_pools[size_class];
 
-        while (pool != head) {
-            tinypy_pool_t *next_pool = pool->next_pool;
-
-            if (pool->ref == 0U) {
-                __tinypy_pool_release_pool(vm, pool);
-            }
-            pool = next_pool;
+        if (pool != NULL) {
+            __tinypy_pool_drop_kept_pool(vm, pool);
         }
     }
     /* The wholly free arena that deallocation keeps. */
@@ -347,6 +389,11 @@ void tinypy_internal_pool_finalize(tinypy_vm_t *vm) {
         }
         arena = next_arena;
     }
+}
+//////////////////////////////////////////////////////////////////////////
+void tinypy_internal_pool_finalize(tinypy_vm_t *vm) {
+    tinypy_pool_allocator_t *allocator = &vm->pool_allocator;
+    tinypy_internal_pool_trim(vm);
     if (allocator->arenas != NULL) {
         size_t allocation_size;
 
@@ -483,14 +530,11 @@ void tinypy_internal_pool_deallocate(tinypy_vm_t *vm, void *memory, size_t size)
         if (pool->ref != 0U) {
             return;
         }
-        /* The one used pool of its size class stays when it empties: a loop
-           that allocates and frees a block of a class whose other pools are
-           full would otherwise take a pool from an arena and give it back on
-           every pass. Under a heap budget it goes back at once. */
-        if (pool->next_pool == pool->previous_pool && vm->max_heap_bytes == 0U) {
+        /* The kept pool of its size class stays when it empties again. */
+        if (allocator->kept_pools[pool->size_class] == pool) {
             return;
         }
-        __tinypy_pool_release_pool(vm, pool);
+        __tinypy_pool_empty_pool(vm, pool);
         return;
     }
 

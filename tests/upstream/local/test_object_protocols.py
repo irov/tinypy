@@ -570,6 +570,23 @@ class ObjectProtocols(unittest.TestCase):
         self.assertEqual(Assigning('a', 'b')[-1], ('assigned', 0))
         self.assertEqual(Assigning('a', 'b')[-1], ('assigned', -1))
 
+    def test_exception_subscript_reads_the_getitem_that_the_key_installs(self):
+        class Index(object):
+            def __init__(self, owner, value):
+                self.owner = owner
+                self.value = value
+            def __index__(self):
+                self.owner.__getitem__ = lambda error, index: ('installed', index)
+                return self.value
+        for value in (1, 0, -1, 5):
+            class Error(Exception):
+                pass
+            self.assertEqual(Error('a', 'b')[Index(Error, value)], ('installed', value))
+        class Plain(Exception):
+            pass
+        error = Plain('a', 'b')
+        self.assertEqual((error[1], error[True], error[1L], error[-2]), ('b', 'b', 'b', 'a'))
+
     def test_exception_unicode_follows_str(self):
         class Error(Exception):
             def __str__(self):
@@ -2236,6 +2253,35 @@ class ObjectProtocols(unittest.TestCase):
         finally:
             __builtin__.__import__ = real_import
         self.assertEqual(reduce_from_module(), '_reconstructor')
+
+    def test_object_reduce_import_lookup_failure_reads_as_key_error(self):
+        class Plain(object):
+            pass
+
+        class Refusing(dict):
+            def __getitem__(self, key):
+                raise ValueError('refused ' * 1000)
+
+        class Missing(dict):
+            def __missing__(self, key):
+                raise ValueError(key)
+
+        class Colliding(object):
+            def __hash__(self):
+                return hash('__import__')
+
+            def __eq__(self, other):
+                raise ValueError('compared')
+
+        code = compile('Plain().__reduce_ex__(2)', 'reduce', 'eval')
+        for builtins in ({}, Refusing(), Missing(), {Colliding(): None}):
+            for attempt in range(3):
+                try:
+                    eval(code, {'Plain': Plain, '__builtins__': builtins})
+                except KeyError as error:
+                    self.assertEqual(error.args, ('__import__',))
+                else:
+                    self.fail('builtins without __import__')
 
     def test_heap_type_flags_include_checktypes(self):
         class Plain(object):

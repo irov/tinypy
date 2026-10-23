@@ -531,6 +531,30 @@ class ComparisonDeep(unittest.TestCase):
         self.assertEqual((code((None, shared)) == code((None, shared)), code((None, Text('a'))) == code((None, Text('a'))), code((None, (1, 'a'))) == code((None, (1, 'a')))), (True, False, True))
         self.assertEqual((code((None, 0.0)) == code((None, -0.0)), code((None, 1)) == code((None, 1L)), code((None, frozenset([1, 2]))) == code((None, frozenset([2, 1])))), (False, False, True))
 
+    def test_code_equality_compares_fields_in_the_order_of_code_richcompare(self):
+        def template():
+            return 1
+        source = template.func_code
+        class Name(str):
+            __hash__ = str.__hash__
+            def __eq__(self, other):
+                raise ValueError('name')
+        class Constant(object):
+            def __eq__(self, other):
+                raise ValueError('constant')
+        def code(argcount, name, constants, names):
+            return type(source)(argcount, argcount, source.co_stacksize, source.co_flags, source.co_code, constants, names, ('a',)[:argcount], 'code.py', name, 1, source.co_lnotab)
+        cases = (
+            (lambda: code(0, Name('f'), (None,), ()) == code(1, Name('f'), (None,), ()), 'name'),
+            (lambda: code(0, 'f', (Constant(),), ('a',)) == code(0, 'f', (Constant(),), ('b',)), 'constant'),
+        )
+        for function, message in cases:
+            with self.assertRaises(ValueError) as caught:
+                function()
+            self.assertEqual(str(caught.exception), message)
+        self.assertFalse(code(0, 'f', (Constant(),), ()) == code(1, 'f', (Constant(),), ()))
+        self.assertFalse(code(0, 'f', (Constant(),), ()) == code(0, 'g', (Constant(),), ()))
+
     def test_code_equality_compares_nested_constants_by_their_keys(self):
         def template():
             return 1

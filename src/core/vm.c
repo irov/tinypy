@@ -1637,7 +1637,6 @@ static void __tinypy_internal_initialize_modules(tinypy_vm_t *vm) {
     tinypy_internal_initialize_codecs_module(vm);
     tinypy_internal_initialize_functools_module(vm);
     tinypy_internal_initialize_struct_module(vm);
-    tinypy_internal_initialize_array_module(vm);
     tinypy_internal_initialize_copy_reg_module(vm);
     tinypy_internal_initialize_sre_module(vm);
     tinypy_internal_initialize_exceptions_module(vm);
@@ -1978,6 +1977,11 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
         return NULL;
     }
     vm->max_heap_bytes = max_heap_bytes;
+    /* Under a heap budget the pool keeps no memory for reuse, including what
+       the bootstrap left. */
+    if (max_heap_bytes != 0U) {
+        tinypy_internal_pool_trim(vm);
+    }
     return vm;
 }
 //////////////////////////////////////////////////////////////////////////
