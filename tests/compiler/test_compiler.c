@@ -2355,11 +2355,11 @@ static int32_t __test_compile_options_struct_size(void) {
 
     tinypy_compile_limits_init(&current);
     current.struct_size = (uint32_t)first_size;
-    tinypy_compile_limits_t *first_limits = (tinypy_compile_limits_t *)malloc(first_size);
+    uint8_t *first_limits = (uint8_t *)malloc(first_size);
     assert(first_limits != NULL);
     (void)memcpy(first_limits, &current, first_size);
     tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
-    options.limits = first_limits;
+    options.limits = (const tinypy_compile_limits_t *)(const void *)first_limits;
     tinypy_value_t *code = tinypy_compile_source(vm, "x = 1\n", 6U, "first.py", 8U, &options, &error);
     assert(code != NULL && error == NULL);
     tinypy_release(code);
@@ -2369,14 +2369,16 @@ static int32_t __test_compile_options_struct_size(void) {
     tinypy_value_t *result = tinypy_exec_source(vm, "x = 1\n", 6U, "first.py", 8U, globals, NULL, &options, &error);
     assert(result != NULL && error == NULL);
     tinypy_release(result);
-    first_limits->max_source_bytes = 2U;
+    size_t small_source_limit = 2U;
+    (void)memcpy(first_limits + offsetof(tinypy_compile_limits_t, max_source_bytes), &small_source_limit, sizeof(small_source_limit));
     code = tinypy_compile_source(vm, "x = 1\n", 6U, "first.py", 8U, &options, &error);
     assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_COMPILER_LIMIT);
     tinypy_error_release(error);
     error = NULL;
     tinypy_vm_clear_error(vm);
-    first_limits->max_source_bytes = current.max_source_bytes;
-    first_limits->abi_version = 99U;
+    (void)memcpy(first_limits + offsetof(tinypy_compile_limits_t, max_source_bytes), &current.max_source_bytes, sizeof(current.max_source_bytes));
+    uint32_t invalid_abi_version = 99U;
+    (void)memcpy(first_limits + offsetof(tinypy_compile_limits_t, abi_version), &invalid_abi_version, sizeof(invalid_abi_version));
     code = tinypy_compile_source(vm, "x = 1\n", 6U, "first.py", 8U, &options, &error);
     assert(code == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_TYPE);
     tinypy_error_release(error);

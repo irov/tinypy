@@ -123,6 +123,7 @@
   "core_type_versions",
   "core_unicode_utf8",
   "core_value_lifetime",
+  "core_vm_create_abi",
   "marshal_codec",
   "runtime_array_heap_budget",
   "runtime_class_subclass_native_guard",
@@ -153,6 +154,7 @@
   "runtime_reduce_import_without_frame",
   "runtime_representation_errors",
   "runtime_sre_allocation_refusal",
+  "runtime_sre_interrupt",
   "runtime_stack_budget",
   "runtime_subtype_factory_limits",
   "runtime_text_heap_budget"

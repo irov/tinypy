@@ -13,6 +13,7 @@
 #define TINYPY_SRE_INFO_PREFIX UINT32_C(1)
 #define TINYPY_SRE_INFO_LITERAL UINT32_C(2)
 #define TINYPY_SRE_INFO_CHARSET UINT32_C(4)
+#define TINYPY_SRE_POLL_STEPS 65536U
 
 typedef enum tinypy_sre_opcode_e {
     TINYPY_SRE_OP_FAILURE = 0,
@@ -141,6 +142,9 @@ typedef struct tinypy_sre_state_t {
     ptrdiff_t lastindex;
     size_t repeat;
     tinypy_sre_context_t *contexts;
+    tinypy_value_t *export_owner;
+    tinypy_error_t **out_error;
+    size_t poll_steps;
     size_t context_count;
     size_t context_capacity;
     size_t *mark_stack;
@@ -148,6 +152,7 @@ typedef struct tinypy_sre_state_t {
     size_t mark_capacity;
     tinypy_bool_t invalid_code;
     tinypy_bool_t memory_failed;
+    tinypy_bool_t interrupted;
 } tinypy_sre_state_t;
 
 static tinypy_bool_t __tinypy_sre_match(tinypy_sre_state_t *state, size_t start_pc, size_t *inout_position, size_t *marks, ptrdiff_t *inout_lastmark, ptrdiff_t *inout_lastindex);
@@ -560,6 +565,25 @@ static tinypy_sre_context_t *__tinypy_sre_context_push(tinypy_sre_state_t *state
     return context;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Bound native regex loops without polling the host on every step. */
+static tinypy_bool_t __tinypy_sre_poll_steps(tinypy_vm_t *vm, size_t *steps, tinypy_error_t **out_error) {
+    if (*steps != 0U) {
+        *steps -= 1U;
+        return TINYPY_TRUE;
+    }
+    *steps = TINYPY_SRE_POLL_STEPS - 1U;
+    tinypy_bool_t running = tinypy_internal_eval_poll_interrupt(vm, out_error);
+    return running;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_sre_poll(tinypy_sre_state_t *state) {
+    if (__tinypy_sre_poll_steps(state->vm, &state->poll_steps, state->out_error) == 0) {
+        state->interrupted = TINYPY_TRUE;
+        return TINYPY_FALSE;
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 /* Counts how often the single-character item at item_pc matches, up to limit. */
 static size_t __tinypy_sre_count(tinypy_sre_state_t *state, size_t item_pc, size_t position, size_t limit) {
     const uint32_t *code = state->pattern->code;
@@ -579,6 +603,9 @@ static size_t __tinypy_sre_count(tinypy_sre_state_t *state, size_t item_pc, size
         break;
     case TINYPY_SRE_OP_ANY:
         while (position < end && __tinypy_sre_is_linebreak(__tinypy_sre_character_at(state, position)) == 0) {
+            if (__tinypy_sre_poll(state) == 0) {
+                return 0U;
+            }
             position += 1U;
         }
         break;
@@ -587,6 +614,9 @@ static size_t __tinypy_sre_count(tinypy_sre_state_t *state, size_t item_pc, size
             return 0U;
         }
         while (position < end && __tinypy_sre_character_at(state, position) == code[item_pc + 1U]) {
+            if (__tinypy_sre_poll(state) == 0) {
+                return 0U;
+            }
             position += 1U;
         }
         break;
@@ -595,6 +625,9 @@ static size_t __tinypy_sre_count(tinypy_sre_state_t *state, size_t item_pc, size
             return 0U;
         }
         while (position < end && __tinypy_sre_character_at(state, position) != code[item_pc + 1U]) {
+            if (__tinypy_sre_poll(state) == 0) {
+                return 0U;
+            }
             position += 1U;
         }
         break;
@@ -603,6 +636,9 @@ static size_t __tinypy_sre_count(tinypy_sre_state_t *state, size_t item_pc, size
             return 0U;
         }
         while (position < end && __tinypy_sre_charset(state->pattern, item_pc + 2U, __tinypy_sre_character_at(state, position)) != 0) {
+            if (__tinypy_sre_poll(state) == 0) {
+                return 0U;
+            }
             position += 1U;
         }
         break;
@@ -610,6 +646,9 @@ static size_t __tinypy_sre_count(tinypy_sre_state_t *state, size_t item_pc, size
         while (position < end) {
             size_t next_position;
 
+            if (__tinypy_sre_poll(state) == 0) {
+                return 0U;
+            }
             if (__tinypy_sre_match_one(state, item_pc, position, &next_position) == 0) {
                 break;
             }
@@ -663,6 +702,9 @@ entrance:
     }
 
 dispatch:
+    if (__tinypy_sre_poll(state) == 0) {
+        goto failure;
+    }
     if (pc >= code_size) {
         goto invalid;
     }
@@ -764,6 +806,9 @@ dispatch:
             uint32_t left;
             uint32_t right;
 
+            if (__tinypy_sre_poll(state) == 0) {
+                goto failure;
+            }
             if (ctx->position >= state->end) {
                 ret = TINYPY_FALSE;
                 goto exit;
@@ -851,6 +896,9 @@ dispatch:
             goto exit;
         }
         count = __tinypy_sre_count(state, pc + 4U, ctx->position, code[pc] == TINYPY_SRE_OP_REPEAT_ONE ? maximum : minimum);
+        if (state->interrupted != 0) {
+            goto failure;
+        }
         if (count < minimum) {
             ret = TINYPY_FALSE;
             goto exit;
@@ -965,6 +1013,9 @@ dispatch:
     }
 
 branch_next:
+    if (__tinypy_sre_poll(state) == 0) {
+        goto failure;
+    }
     /* ctx->pc is the header of the alternative to try; a zero header ends
        the list. */
     if (ctx->pc >= code_size) {
@@ -1009,6 +1060,9 @@ repeat_one_next:
     minimum = code[ctx->pc + 2U];
     if (ctx->literal_tail != 0) {
         while (ctx->count >= minimum && (ctx->position >= state->end || __tinypy_sre_character_at(state, ctx->position) != ctx->literal)) {
+            if (__tinypy_sre_poll(state) == 0) {
+                goto failure;
+            }
             if (ctx->count == 0U) {
                 break;
             }
@@ -1056,7 +1110,7 @@ exit:
         goto finished;
     }
     ctx = &state->contexts[state->context_count - 1U];
-    if (state->invalid_code != 0 || state->memory_failed != 0) {
+    if (state->invalid_code != 0 || state->memory_failed != 0 || state->interrupted != 0) {
         ret = TINYPY_FALSE;
         goto exit;
     }
@@ -1465,6 +1519,8 @@ static tinypy_bool_t __tinypy_sre_state_initialize(tinypy_sre_state_t *state, ti
     state->vm = TINYPY_VALUE_VM(&pattern->base);
     state->pattern = pattern;
     state->string = string;
+    state->out_error = out_error;
+    state->poll_steps = TINYPY_SRE_POLL_STEPS;
     if (TINYPY_VALUE_KIND(string) == TINYPY_VALUE_UNICODE) {
         state->bytes = TINYPY_TEXT_BYTES(string);
     }
@@ -1488,6 +1544,13 @@ static tinypy_bool_t __tinypy_sre_state_initialize(tinypy_sre_state_t *state, ti
     state->mark_capacity = pattern->cache_mark_capacity;
     pattern->cache_marks = NULL;
     pattern->cache_mark_capacity = 0U;
+    state->export_owner = TINYPY_VALUE_KIND(string) == TINYPY_VALUE_BUFFER ? TINYPY_BUFFER_OBJECT(string)->owner : string;
+    if (TINYPY_VALUE_KIND(state->export_owner) == TINYPY_VALUE_BYTEARRAY) {
+        TINYPY_BYTEARRAY_OBJECT(state->export_owner)->exports += 1U;
+    }
+    else if (tinypy_internal_array_check(state->export_owner) != 0) {
+        tinypy_internal_array_export(state->export_owner, 1);
+    }
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -1497,6 +1560,13 @@ static tinypy_bool_t __tinypy_sre_state_initialize(tinypy_sre_state_t *state, ti
 static void __tinypy_sre_state_finalize(tinypy_sre_state_t *state) {
     tinypy_sre_pattern_object_t *pattern = state->pattern;
     tinypy_value_t *released_string = NULL;
+
+    if (TINYPY_VALUE_KIND(state->export_owner) == TINYPY_VALUE_BYTEARRAY) {
+        TINYPY_BYTEARRAY_OBJECT(state->export_owner)->exports -= 1U;
+    }
+    else if (tinypy_internal_array_check(state->export_owner) != 0) {
+        tinypy_internal_array_export(state->export_owner, -1);
+    }
 
     if (state->characters != NULL && state->string->type != &state->vm->types[TINYPY_VALUE_UNICODE]) {
         tinypy_internal_vm_deallocate(state->vm, state->characters, state->size * sizeof(*state->characters));
@@ -1553,6 +1623,9 @@ static void __tinypy_sre_pattern_cache_release(tinypy_sre_pattern_object_t *patt
 //////////////////////////////////////////////////////////////////////////
 /* Reports a matcher failure that is an error rather than a non-match. */
 static tinypy_bool_t __tinypy_sre_state_check(tinypy_sre_state_t *state, tinypy_error_t **out_error) {
+    if (state->interrupted != 0) {
+        return TINYPY_FALSE;
+    }
     if (state->invalid_code != 0) {
         tinypy_internal_make_vm_error(state->vm, TINYPY_ERROR_RUNTIME, "invalid SRE bytecode", out_error);
         return TINYPY_FALSE;
@@ -1622,6 +1695,9 @@ static tinypy_value_t *__tinypy_sre_execute(tinypy_sre_pattern_object_t *pattern
 
         if (has_prefix != 0) {
             while (candidate < endpos && __tinypy_sre_character_at(&state, candidate) != prefix_character) {
+                if (__tinypy_sre_poll(&state) == 0) {
+                    goto finish;
+                }
                 candidate += 1U;
             }
             if (candidate >= endpos) {
@@ -1630,6 +1706,9 @@ static tinypy_value_t *__tinypy_sre_execute(tinypy_sre_pattern_object_t *pattern
         }
         else if (charset_pc != 0U) {
             while (candidate < endpos && __tinypy_sre_charset(pattern, charset_pc, __tinypy_sre_character_at(&state, candidate)) == 0) {
+                if (__tinypy_sre_poll(&state) == 0) {
+                    goto finish;
+                }
                 candidate += 1U;
             }
             if (candidate >= endpos) {
@@ -1650,6 +1729,7 @@ static tinypy_value_t *__tinypy_sre_execute(tinypy_sre_pattern_object_t *pattern
             break;
         }
     }
+finish:
     __tinypy_sre_state_finalize(&state);
     if (result != NULL || tinypy_vm_has_error(vm) != 0) {
         return result;
@@ -2007,6 +2087,7 @@ static tinypy_value_t *__tinypy_sre_pattern_findall(tinypy_value_t *function, ti
     tinypy_value_t *result;
     size_t pos;
     size_t endpos;
+    size_t poll_steps = TINYPY_SRE_POLL_STEPS;
 
     (void)user_data;
     tinypy_value_t *receiver = __tinypy_sre_method_receiver(function, args, kwargs, 1U, 3U, TINYPY_ARITY_STYLE_PARSED, &vm->types[TINYPY_VALUE_SRE_PATTERN], out_error);
@@ -2020,6 +2101,10 @@ static tinypy_value_t *__tinypy_sre_pattern_findall(tinypy_value_t *function, ti
     }
     result = tinypy_list_from_items(vm, NULL, 0U);
     while (pos <= endpos) {
+        if (__tinypy_sre_poll_steps(vm, &poll_steps, out_error) == 0) {
+            TINYPY_DECREF(result);
+            return NULL;
+        }
         tinypy_value_t *match_value = __tinypy_sre_execute(pattern, string, pos, endpos, INT32_C(1), out_error);
         tinypy_sre_match_object_t *match;
         tinypy_value_t *item;
@@ -2089,6 +2174,7 @@ static tinypy_value_t *__tinypy_sre_pattern_sub_expanded(tinypy_value_t *functio
     size_t pos = 0U;
     size_t copied = 0U;
     size_t substitutions = 0U;
+    size_t poll_steps = TINYPY_SRE_POLL_STEPS;
     int64_t limit = 0;
     tinypy_bool_t callable;
 
@@ -2118,6 +2204,10 @@ static tinypy_value_t *__tinypy_sre_pattern_sub_expanded(tinypy_value_t *functio
     }
     pieces = tinypy_list_from_items(vm, NULL, 0U);
     while (pos <= string_size && (limit == 0 || (limit > 0 && substitutions < (uint64_t)limit))) {
+        if (__tinypy_sre_poll_steps(vm, &poll_steps, out_error) == 0) {
+            TINYPY_DECREF(pieces);
+            return NULL;
+        }
         tinypy_value_t *match_value = __tinypy_sre_execute(pattern, string, pos, string_size, INT32_C(1), out_error);
         tinypy_sre_match_object_t *match;
         tinypy_value_t *piece;
@@ -2899,6 +2989,7 @@ static tinypy_value_t *__tinypy_sre_pattern_split(tinypy_value_t *function, tiny
     size_t pos = 0U;
     size_t last = 0U;
     size_t splits = 0U;
+    size_t poll_steps = TINYPY_SRE_POLL_STEPS;
     int64_t limit = 0;
 
     (void)user_data;
@@ -2925,6 +3016,10 @@ static tinypy_value_t *__tinypy_sre_pattern_split(tinypy_value_t *function, tiny
     }
     result = tinypy_list_from_items(vm, NULL, 0U);
     while (pos <= string_size && (limit == 0 || (limit > 0 && splits < (uint64_t)limit))) {
+        if (__tinypy_sre_poll_steps(vm, &poll_steps, out_error) == 0) {
+            TINYPY_DECREF(result);
+            return NULL;
+        }
         tinypy_value_t *match_value = __tinypy_sre_execute(pattern, string, pos, string_size, INT32_C(1), out_error);
         tinypy_sre_match_object_t *match;
         tinypy_value_t *piece;

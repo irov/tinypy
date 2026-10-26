@@ -70,10 +70,12 @@ typedef struct tinypy_vm_config_t {
     size_t max_stack_bytes;
 } tinypy_vm_config_t;
 
-/* Returns NULL, with everything it allocated released, when max_heap_bytes is
- * smaller than the memory the VM bootstrap holds, or when the allocator
- * returned NULL for the VM object or for a bootstrap request the bootstrap
- * continues after; other bootstrap requests must not fail. */
+/* Returns NULL for an unsupported ABI version, invalid structure size or
+ * allocator/host callback configuration. Also returns NULL, with everything
+ * it allocated released, when max_heap_bytes is smaller than the memory the
+ * VM bootstrap holds, or when the allocator returned NULL for the VM object
+ * or for a bootstrap request the bootstrap continues after; other bootstrap
+ * requests must not fail. */
 tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config);
 tinypy_value_t *tinypy_vm_builtins(const tinypy_vm_t *vm);
 

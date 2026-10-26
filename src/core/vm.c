@@ -1760,8 +1760,10 @@ tinypy_bool_t tinypy_internal_host_valid(const tinypy_host_t *host) {
     if (host == NULL) {
         return TINYPY_TRUE;
     }
-
-    return host->abi_version == TINYPY_ABI_VERSION && host->struct_size >= (uint32_t)sizeof(*host) && (host->resolve_module == NULL || host->release_module_artifact != NULL);
+    if (host->abi_version != TINYPY_ABI_VERSION || host->struct_size < (uint32_t)offsetof(tinypy_host_t, poll_interrupt)) {
+        return TINYPY_FALSE;
+    }
+    return host->resolve_module == NULL || host->release_module_artifact != NULL;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_vm_valid(const tinypy_vm_t *vm) {
@@ -1844,8 +1846,23 @@ tinypy_allocator_t tinypy_internal_vm_heap_allocator(tinypy_vm_t *vm) {
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
-
+    if (config == NULL || config->abi_version != TINYPY_ABI_VERSION ||
+        config->struct_size < (uint32_t)(offsetof(tinypy_vm_config_t, allocator) + sizeof(config->allocator))) {
+        return NULL;
+    }
     const tinypy_allocator_t *allocator = config->allocator;
+
+    if (allocator == NULL || allocator->abi_version != TINYPY_ABI_VERSION || allocator->struct_size < (uint32_t)sizeof(*allocator) ||
+        allocator->allocate == NULL || allocator->reallocate == NULL || allocator->deallocate == NULL) {
+        return NULL;
+    }
+    const tinypy_host_t *host = config->struct_size >= (uint32_t)(offsetof(tinypy_vm_config_t, host) + sizeof(config->host))
+                                    ? config->host
+                                    : NULL;
+
+    if (tinypy_internal_host_valid(host) == 0) {
+        return NULL;
+    }
 
     tinypy_vm_t *vm = (tinypy_vm_t *)allocator->allocate(
         allocator->user_data,
@@ -1877,10 +1894,12 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
             : 0;
     tinypy_internal_pool_initialize(vm);
 
-    if (config->host != NULL) {
-        size_t host_size = config->host->struct_size < (uint32_t)sizeof(vm->host) ? (size_t)config->host->struct_size : sizeof(vm->host);
+    if (host != NULL) {
+        size_t host_size = host->struct_size >= (uint32_t)sizeof(vm->host)
+                               ? sizeof(vm->host)
+                               : offsetof(tinypy_host_t, poll_interrupt);
 
-        (void)memcpy(&vm->host, config->host, host_size);
+        (void)memcpy(&vm->host, host, host_size);
         vm->has_host = 1;
     }
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)

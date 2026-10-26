@@ -145,6 +145,71 @@ static tinypy_vm_config_t __test_make_config(const tinypy_allocator_t *allocator
     return config;
 }
 //////////////////////////////////////////////////////////////////////////
+static const tinypy_module_artifact_t *__test_vm_create_unused_resolver(void *user_data, const tinypy_module_request_t *request) {
+    (void)user_data;
+    (void)request;
+    return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_vm_create_abi(void) {
+    test_allocator_state_t state = {0};
+    tinypy_allocator_t allocator = __test_make_allocator(&state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_host_t host = {0};
+    tinypy_vm_t *vm;
+
+    TEST_CHECK(tinypy_vm_create(NULL) == NULL);
+    config.abi_version = 99U;
+    TEST_CHECK(tinypy_vm_create(&config) == NULL);
+    config.abi_version = TINYPY_ABI_VERSION;
+    config.struct_size = (uint32_t)offsetof(tinypy_vm_config_t, allocator);
+    TEST_CHECK(tinypy_vm_create(&config) == NULL);
+    config = __test_make_config(&allocator);
+    allocator.abi_version = 99U;
+    TEST_CHECK(tinypy_vm_create(&config) == NULL);
+    allocator.abi_version = TINYPY_ABI_VERSION;
+    allocator.struct_size = (uint32_t)sizeof(allocator) - 1U;
+    TEST_CHECK(tinypy_vm_create(&config) == NULL);
+    allocator.struct_size = (uint32_t)sizeof(allocator);
+    allocator.deallocate = NULL;
+    TEST_CHECK(tinypy_vm_create(&config) == NULL);
+    allocator.deallocate = __test_deallocate;
+    host.abi_version = 99U;
+    host.struct_size = (uint32_t)sizeof(host);
+    config.host = &host;
+    TEST_CHECK(tinypy_vm_create(&config) == NULL);
+    host.abi_version = TINYPY_ABI_VERSION;
+    host.struct_size = (uint32_t)offsetof(tinypy_host_t, poll_interrupt) - 1U;
+    TEST_CHECK(tinypy_vm_create(&config) == NULL);
+    host.struct_size = (uint32_t)sizeof(host);
+    host.resolve_module = __test_vm_create_unused_resolver;
+    TEST_CHECK(tinypy_vm_create(&config) == NULL);
+    host.resolve_module = NULL;
+    host.struct_size = (uint32_t)offsetof(tinypy_host_t, poll_interrupt);
+    vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL && vm->host.poll_interrupt == NULL);
+    tinypy_vm_destroy(vm);
+    host.struct_size += 1U;
+    vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL && vm->host.poll_interrupt == NULL);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(state.outstanding_allocations == 0U);
+
+    config = __test_make_config(&allocator);
+    size_t first_size = offsetof(tinypy_vm_config_t, allocator) + sizeof(config.allocator);
+    uint8_t *first_config = (uint8_t *)malloc(first_size);
+    TEST_CHECK(first_config != NULL);
+    config.struct_size = (uint32_t)first_size;
+    (void)memcpy(first_config, &config, first_size);
+    vm = tinypy_vm_create((const tinypy_vm_config_t *)(const void *)first_config);
+    TEST_CHECK(vm != NULL && vm->has_host == 0);
+    tinypy_vm_destroy(vm);
+    free(first_config);
+    TEST_CHECK(state.outstanding_allocations == 0U);
+    TEST_CHECK(state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 #if defined(TINYPY_CYCLE_DIAGNOSTICS)
 typedef struct test_cycle_diagnostic_state_t {
     char text[32768];
@@ -6541,7 +6606,7 @@ static const tinypy_module_artifact_t *__test_module_resolver_contract_resolve(v
         state->artifact.flags = (uint32_t)TINYPY_MODULE_ARTIFACT_PACKAGE;
         state->artifact.package_token_size = 4U;
     }
-    if (__test_module_request_is(request, "raising_artifact") != TINYPY_FALSE) {
+    if (__test_module_request_is(request, "raising_artifact") != TINYPY_FALSE || __test_module_request_is(request, "raising_artifact_release_clear") != TINYPY_FALSE) {
         tinypy_vm_raise_error(state->vm, TINYPY_ERROR_RUNTIME, "the resolver raised");
     }
     if (__test_module_request_is(request, "native_pending") != TINYPY_FALSE || __test_module_request_is(request, "native_failing") != TINYPY_FALSE) {
@@ -6555,8 +6620,13 @@ static const tinypy_module_artifact_t *__test_module_resolver_contract_resolve(v
 static void __test_module_resolver_contract_release(void *user_data, const tinypy_module_artifact_t *artifact) {
     test_module_resolver_state_t *state = (test_module_resolver_state_t *)user_data;
 
-    (void)artifact;
     state->release_count += 1U;
+    if (artifact->canonical_name_size == sizeof("raising_artifact_release_clear") - 1U && memcmp(artifact->canonical_name, "raising_artifact_release_clear", artifact->canonical_name_size) == 0) {
+        tinypy_vm_clear_error(state->vm);
+    }
+    if (artifact->canonical_name_size == sizeof("valid_release_raise") - 1U && memcmp(artifact->canonical_name, "valid_release_raise", artifact->canonical_name_size) == 0) {
+        tinypy_vm_raise_error(state->vm, TINYPY_ERROR_VALUE, "the release raised");
+    }
 }
 //////////////////////////////////////////////////////////////////////////
 /* Imports name, which must fail with an error of kind and message. */
@@ -6608,11 +6678,13 @@ static int32_t __test_module_resolver_contract(void) {
     TEST_CHECK(__test_module_import_fails(vm, "raising_runtime", TINYPY_ERROR_RUNTIME, "the resolver failed") != TINYPY_FALSE);
     TEST_CHECK(__test_module_import_fails(vm, "raising_import", TINYPY_ERROR_IMPORT, "No module named raising_import") != TINYPY_FALSE);
     TEST_CHECK(__test_module_import_fails(vm, "raising_artifact", TINYPY_ERROR_RUNTIME, "the resolver raised") != TINYPY_FALSE);
+    TEST_CHECK(__test_module_import_fails(vm, "raising_artifact_release_clear", TINYPY_ERROR_RUNTIME, "the resolver raised") != TINYPY_FALSE);
     TEST_CHECK(__test_module_import_fails(vm, "native_pending", TINYPY_ERROR_VALUE, "the initializer raised") != TINYPY_FALSE);
     TEST_CHECK(__test_module_import_fails(vm, "native_failing", TINYPY_ERROR_VALUE, "the initializer raised") != TINYPY_FALSE);
-    TEST_CHECK(resolver_state.release_count == 5U);
+    TEST_CHECK(__test_module_import_fails(vm, "valid_release_raise", TINYPY_ERROR_VALUE, "the release raised") != TINYPY_FALSE);
+    TEST_CHECK(resolver_state.release_count == 7U);
     tinypy_value_t *modules = tinypy_vm_modules(vm);
-    static const char *const failed_names[] = {"null_filename", "raising_artifact", "native_pending", "native_failing"};
+    static const char *const failed_names[] = {"null_filename", "raising_artifact", "raising_artifact_release_clear", "native_pending", "native_failing", "valid_release_raise"};
     for (size_t index = 0U; index < sizeof(failed_names) / sizeof(failed_names[0]); ++index) {
         tinypy_value_t *key = tinypy_string_from_bytes(vm, failed_names[index], strlen(failed_names[index]));
         TEST_CHECK(tinypy_dict_contains(modules, key) == 0);
@@ -6622,7 +6694,7 @@ static int32_t __test_module_resolver_contract(void) {
     TEST_CHECK(module != NULL && error == NULL);
     tinypy_value_t *value = tinypy_module_get_value(module, "VALUE", 5U);
     TEST_CHECK(value != NULL && tinypy_integer_as_i64(value) == 1);
-    TEST_CHECK(resolver_state.release_count == 6U);
+    TEST_CHECK(resolver_state.release_count == 8U);
     tinypy_release(module);
     tinypy_vm_destroy(vm);
     TEST_CHECK(allocator_state.outstanding_allocations == 0U);
@@ -9418,6 +9490,105 @@ static int32_t __test_sre_allocation_refusal(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+typedef struct test_sre_interrupt_state_t {
+    size_t polls;
+    size_t stop_after;
+    tinypy_bool_t armed;
+    tinypy_bool_t saw_export;
+    tinypy_value_t *subject;
+} test_sre_interrupt_state_t;
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __test_sre_poll_interrupt(void *user_data) {
+    test_sre_interrupt_state_t *state = (test_sre_interrupt_state_t *)user_data;
+
+    if (state->armed == 0) {
+        return TINYPY_FALSE;
+    }
+    state->polls += 1U;
+    if (state->subject != NULL && TINYPY_BYTEARRAY_OBJECT(state->subject)->exports != 0U) {
+        state->saw_export = TINYPY_TRUE;
+    }
+    return state->polls >= state->stop_after ? TINYPY_TRUE : TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_sre_interrupt(void) {
+    static const char setup[] =
+        "import _sre\n"
+        "backtrack = _sre.compile('(a+)+b', 0, [17,4,0,2,0,28,14,1,4294967295,21,0,29,6,1,4294967295,19,97,1,21,1,22,19,98,1], 1)\n"
+        "single = _sre.compile('a+', 0, [29,6,1,4294967295,19,97,1,1], 0)\n"
+        "search = _sre.compile('b', 0, [19,98,1], 0)\n"
+        "literal = _sre.compile('a', 0, [19,97,1], 0)\n"
+        "groupref = _sre.compile('(a{200000})\\\\1', 0, [17,4,0,200000,200000,21,0,29,6,200000,200000,19,97,1,21,1,12,0,1], 1)\n"
+        "subject = bytearray('a' * 200000)\n";
+    static const char *const cases[] = {
+        "backtrack.match('a' * 23)\n",
+        "single.match('a' * 200000)\n",
+        "search.search('a' * 200000)\n",
+        "single.match(subject)\n",
+        "single.match(buffer(subject))\n",
+        "literal.findall('a' * 200000)\n",
+        "literal.sub('', 'a' * 200000)\n",
+        "literal.split('a' * 200000)\n"
+    };
+    test_allocator_state_t allocator_state = {0};
+    test_sre_interrupt_state_t poll_state = {0};
+    tinypy_allocator_t allocator = __test_make_allocator(&allocator_state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_host_t host = {0};
+    tinypy_compile_options_t options;
+    tinypy_error_t *error = NULL;
+    size_t index;
+
+    host.abi_version = TINYPY_ABI_VERSION;
+    host.struct_size = (uint32_t)sizeof(host);
+    host.user_data = &poll_state;
+    host.poll_interrupt = __test_sre_poll_interrupt;
+    config.host = &host;
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_value_t *result = tinypy_exec_source(vm, setup, sizeof(setup) - 1U, "sre.py", 6U, globals, NULL, &options, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+    poll_state.stop_after = 2U;
+    poll_state.subject = __test_global(globals, "subject");
+    TEST_CHECK(poll_state.subject != NULL);
+
+    for (index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        poll_state.polls = 0U;
+        poll_state.saw_export = TINYPY_FALSE;
+        poll_state.armed = TINYPY_TRUE;
+        result = tinypy_exec_source(vm, cases[index], strlen(cases[index]), "sre.py", 6U, globals, NULL, &options, &error);
+        poll_state.armed = TINYPY_FALSE;
+        TEST_CHECK(result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_INTERRUPT);
+        TEST_CHECK(poll_state.polls >= 2U);
+        if (index >= 3U && index < 5U) {
+            TEST_CHECK(poll_state.saw_export != 0);
+            TEST_CHECK(TINYPY_BYTEARRAY_OBJECT(poll_state.subject)->exports == 0U);
+        }
+        tinypy_error_release(error);
+        error = NULL;
+        tinypy_vm_clear_error(vm);
+    }
+    static const char groupref_source[] = "groupref.match('a' * 400000)\n";
+    poll_state.polls = 0U;
+    poll_state.stop_after = 5U;
+    poll_state.armed = TINYPY_TRUE;
+    result = tinypy_exec_source(vm, groupref_source, sizeof(groupref_source) - 1U, "sre.py", 6U, globals, NULL, &options, &error);
+    poll_state.armed = TINYPY_FALSE;
+    TEST_CHECK(result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_INTERRUPT);
+    TEST_CHECK(poll_state.polls == poll_state.stop_after);
+    tinypy_error_release(error);
+    tinypy_vm_clear_error(vm);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U);
+    TEST_CHECK(allocator_state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 /* refuse_size(size) makes the host refuse every request of that size until
    refuse_size(0); allocation_size(value) is the size its allocation took. */
 static tinypy_value_t *__test_native_refuse_size(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
@@ -11848,6 +12019,10 @@ int main(int argc, char **argv) {
         int return_value_1 = __test_allocator_accounting();
         return return_value_1;
     }
+    if (strcmp(argv[1], "vm_create_abi") == 0) {
+        int result = __test_vm_create_abi();
+        return result;
+    }
     if (strcmp(argv[1], "pool_allocator") == 0) {
         int return_value_2 = __test_pool_allocator();
         return return_value_2;
@@ -12039,6 +12214,10 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "sre_allocation_refusal") == 0) {
         int sre_allocation_refusal = __test_sre_allocation_refusal();
         return sre_allocation_refusal;
+    }
+    if (strcmp(argv[1], "sre_interrupt") == 0) {
+        int result = __test_sre_interrupt();
+        return result;
     }
     if (strcmp(argv[1], "text_heap_budget") == 0) {
         int text_heap_budget = __test_text_heap_budget();

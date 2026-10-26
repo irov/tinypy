@@ -499,6 +499,19 @@ static tinypy_value_t *__tinypy_import_init_builtin(tinypy_vm_t *vm, tinypy_valu
     return module;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Releasing an artifact must not discard an import error already pending. */
+static void __tinypy_import_release_artifact(tinypy_vm_t *vm, const tinypy_module_artifact_t *artifact, tinypy_error_t **out_error) {
+    if (vm->raised_value == NULL && (out_error == NULL || *out_error == NULL)) {
+        vm->host.release_module_artifact(vm->host.user_data, artifact);
+        return;
+    }
+    tinypy_internal_exception_state_t state;
+
+    tinypy_internal_exception_preserve_begin(vm, &state);
+    vm->host.release_module_artifact(vm->host.user_data, artifact);
+    tinypy_internal_exception_preserve_restore(vm, &state);
+}
+//////////////////////////////////////////////////////////////////////////
 /* A module nobody provides is reported through out_not_found without an
    error: the caller quotes the name the way its CPython counterpart does.
    Like find_module, the finders come first, then the modules the VM
@@ -611,13 +624,13 @@ static tinypy_value_t *__tinypy_import_load_one(tinypy_vm_t *vm, const char *nam
     }
     /* Nor does an artifact returned with an exception raised load. */
     if (vm->raised_value != NULL) {
-        vm->host.release_module_artifact(vm->host.user_data, artifact);
+        __tinypy_import_release_artifact(vm, artifact, out_error);
         TINYPY_DECREF(key);
         tinypy_internal_exception_make_diagnostic(vm, out_error);
         return NULL;
     }
     if (__tinypy_import_artifact_valid(artifact, name, name_size) == 0) {
-        vm->host.release_module_artifact(vm->host.user_data, artifact);
+        __tinypy_import_release_artifact(vm, artifact, out_error);
         TINYPY_DECREF(key);
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_IMPORT, "host resolver returned an invalid module artifact", out_error);
         return NULL;
@@ -631,7 +644,7 @@ static tinypy_value_t *__tinypy_import_load_one(tinypy_vm_t *vm, const char *nam
         prepared = tinypy_internal_dict_set_checked(vm, vm->modules, key, module, out_error);
     }
     if (prepared == 0) {
-        vm->host.release_module_artifact(vm->host.user_data, artifact);
+        __tinypy_import_release_artifact(vm, artifact, out_error);
         TINYPY_DECREF(module);
         TINYPY_DECREF(key);
         return NULL;
@@ -708,7 +721,16 @@ static tinypy_value_t *__tinypy_import_load_one(tinypy_vm_t *vm, const char *nam
             }
         }
     }
-    vm->host.release_module_artifact(vm->host.user_data, artifact);
+    __tinypy_import_release_artifact(vm, artifact, out_error);
+    if (vm->raised_value != NULL) {
+        loaded = 0;
+        if (out_error == NULL || *out_error == NULL) {
+            tinypy_internal_exception_make_diagnostic(vm, out_error);
+        }
+    }
+    if (out_error != NULL && *out_error != NULL) {
+        loaded = 0;
+    }
     /* A failed module leaves sys.modules; releasing it sets its globals to
        None the way _PyModule_Clear does, for the functions that outlive it. */
     if (loaded == 0) {
