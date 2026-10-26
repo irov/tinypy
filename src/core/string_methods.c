@@ -5581,20 +5581,22 @@ static tinypy_bool_t __tinypy_percent_is_mapping(tinypy_value_t *value) {
 /* Consumes prefix's storage: the unicode of its ASCII bytes and then tail. */
 static TINYPY_NOINLINE tinypy_value_t *__tinypy_percent_join_unicode(tinypy_vm_t *vm, tinypy_string_builder_t *prefix, tinypy_value_t *tail, tinypy_error_t **out_error) {
     size_t tail_size = TINYPY_TEXT_BYTE_SIZE(tail);
-    tinypy_value_t *result = NULL;
-    uint8_t *output;
 
     if (prefix->size > SIZE_MAX - tail_size) {
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_OVERFLOW, "concatenated string is too large", out_error);
+        __tinypy_string_builder_discard(prefix);
+        return NULL;
     }
-    else {
-        result = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_UNICODE, prefix->size + tail_size, prefix->size + TINYPY_SIZED_SIZE(tail), &output, out_error);
+    uint8_t *output;
+    tinypy_value_t *result = tinypy_internal_text_allocate_uninitialized_checked(vm, TINYPY_VALUE_UNICODE, prefix->size + tail_size, prefix->size + TINYPY_SIZED_SIZE(tail), &output, out_error);
+
+    if (result == NULL) {
+        __tinypy_string_builder_discard(prefix);
+        return NULL;
     }
-    if (result != NULL) {
-        (void)memcpy(output, prefix->bytes, prefix->size);
-        if (tail_size != 0U) {
-            (void)memcpy(output + prefix->size, TINYPY_TEXT_BYTES(tail), tail_size);
-        }
+    (void)memcpy(output, prefix->bytes, prefix->size);
+    if (tail_size != 0U) {
+        (void)memcpy(output + prefix->size, TINYPY_TEXT_BYTES(tail), tail_size);
     }
     __tinypy_string_builder_discard(prefix);
     return result;
