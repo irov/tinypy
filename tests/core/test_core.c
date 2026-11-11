@@ -240,6 +240,8 @@ static void __test_cycle_diagnostic(void *user_data, const tinypy_diagnostic_t *
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __test_cycle_diagnostics(void) {
+    /* A dynamic identity call deliberately creates the cycle outside the
+       lexical compiler restriction; the native owner breaks it below. */
     static const char source[] =
         "list_cycle = []\n"
         "list_cycle.append(list_cycle)\n"
@@ -249,7 +251,7 @@ static int32_t __test_cycle_diagnostics(void) {
         "    value = None\n"
         "    def closure():\n"
         "        return value\n"
-        "    value = closure\n"
+        "    value = (lambda function: function)(closure)\n"
         "    return closure\n"
         "cell_cycle = make_cycle()\n";
     test_allocator_state_t allocator_state;

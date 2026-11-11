@@ -1988,6 +1988,113 @@ static int32_t __test_symtable_and_ast_error_messages(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+static int32_t __test_function_self_capture(void) {
+    static const struct {
+        const char *source;
+        const char *message;
+        int32_t line;
+    } rejected[] = {
+        {"def outer():\n    def walk(n): return walk(n - 1)\n", "local function 'walk' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+        {"def outer():\n    def walk(): return walk\n", "local function 'walk' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+        {"def outer():\n    def walk(): return walk\n    return walk()\n", "local function 'walk' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+        {"def outer():\n    def walk():\n        def child(): return walk\n        return child\n", "local function 'walk' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+        {"def outer():\n    def walk():\n        class Child:\n            callback = walk\n        return Child\n", "local function 'walk' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+        {"def outer():\n    walk = lambda n: walk(n - 1)\n", "local function 'lambda' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+        {"def outer():\n    first = second = lambda: second\n", "local function 'lambda' captures its own binding 'second'; use a method or pass the function explicitly", 2},
+        {"def outer():\n    first, second = lambda: first, 1\n", "local function 'lambda' captures its own binding 'first'; use a method or pass the function explicitly", 2},
+        {"def outer():\n    [first, [second]] = [1, [lambda: second]]\n", "local function 'lambda' captures its own binding 'second'; use a method or pass the function explicitly", 2},
+        {"def outer(flag):\n    walk = (lambda: walk) if flag else None\n", "local function 'lambda' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+        {"def outer(flag):\n    walk = None if flag else (lambda: walk)\n", "local function 'lambda' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+        {"def outer(flag):\n    walk, = ((lambda: walk),) if flag else (None,)\n", "local function 'lambda' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+        {"def outer(flag):\n    walk, = (None,) if flag else ((lambda: walk),)\n", "local function 'lambda' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+        {"def outer(flag):\n    [walk] = [lambda: walk] if flag else [None]\n", "local function 'lambda' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+        {"def outer(flag):\n    [walk] = [None] if flag else [lambda: walk]\n", "local function 'lambda' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+        {"def outer(flag):\n    walk, = flag and ((lambda: walk),)\n", "local function 'lambda' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+        {"def outer(flag):\n    [walk] = flag or [lambda: walk]\n", "local function 'lambda' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+        {"def outer(flag):\n    [first, [second]] = [1, [None]] if flag else [1, flag and [lambda: second]]\n", "local function 'lambda' captures its own binding 'second'; use a method or pass the function explicitly", 2},
+        {"def outer(first_flag, second_flag):\n    walk, = (None,) if first_flag else (second_flag and ((lambda: walk),))\n", "local function 'lambda' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+        {"def outer():\n    def walk(): return alias\n    alias = walk\n", "local function 'walk' captures its own binding 'alias'; use a method or pass the function explicitly", 2},
+        {"def outer():\n    def walk(): return last\n    first = walk\n    last = first\n", "local function 'walk' captures its own binding 'last'; use a method or pass the function explicitly", 2},
+        {"def outer():\n    walk = lambda: alias\n    alias = walk\n", "local function 'lambda' captures its own binding 'alias'; use a method or pass the function explicitly", 2},
+        {"def outer():\n    def walk(): return last\n    first, last = walk, first\n", "local function 'walk' captures its own binding 'last'; use a method or pass the function explicitly", 2},
+        {"def outer(flag):\n    def walk(): return alias\n    alias, = (walk,) if flag else (None,)\n", "local function 'walk' captures its own binding 'alias'; use a method or pass the function explicitly", 2},
+        {"def outer(flag):\n    def walk(): return last\n    first, = flag and (walk,)\n    [last] = [None] if flag else [first]\n", "local function 'walk' captures its own binding 'last'; use a method or pass the function explicitly", 2},
+        {"class Owner:\n    def make(self):\n        def __walk(): return __walk\n", "local function '__walk' captures its own binding '_Owner__walk'; use a method or pass the function explicitly", 3},
+        {"class Owner:\n    def make(self):\n        __walk = lambda: __walk\n", "local function 'lambda' captures its own binding '_Owner__walk'; use a method or pass the function explicitly", 3},
+        {"class Owner:\n    def make(self):\n        def __walk(): return __alias\n        __alias = __walk\n", "local function '__walk' captures its own binding '_Owner__alias'; use a method or pass the function explicitly", 3},
+        {"def outer():\n    def walk():\n        yield walk\n", "local function 'walk' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+        {"def outer(flag):\n    if flag:\n        def walk(): return walk\n", "local function 'walk' captures its own binding 'walk'; use a method or pass the function explicitly", 3},
+        {"def outer():\n    @staticmethod\n    def walk(): return walk\n", "local function 'walk' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+        {"def outer():\n    def walk():\n        def middle():\n            def inner(): return walk\n            return inner\n        return middle\n", "local function 'walk' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+        {"def outer(walk):\n    walk = lambda: walk\n", "local function 'lambda' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+        {"def outer():\n    walk = None\n    def walk(): return walk\n", "local function 'walk' captures its own binding 'walk'; use a method or pass the function explicitly", 3},
+        {"def outer():\n    walk = (lambda: walk) or None\n", "local function 'lambda' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+        {"def outer(flag):\n    walk = flag and (lambda: walk)\n", "local function 'lambda' captures its own binding 'walk'; use a method or pass the function explicitly", 2},
+    };
+    static const char *const accepted[] = {
+        "def walk(n): return walk(n - 1) if n else 1\n",
+        "class Owner:\n    def walk(self, n): return self.walk(n - 1) if n else 1\n",
+        "class Owner:\n    @staticmethod\n    def walk(n): return Owner.walk(n - 1) if n else 1\n",
+        "def outer(value):\n    def walk(): return value\n    return walk\n",
+        "def outer():\n    def walk(walk): return walk\n    return walk\n",
+        "def outer():\n    def walk():\n        walk = 1\n        return walk\n    return walk\n",
+        "def outer():\n    def walk():\n        global walk\n        return walk\n    return walk\n",
+        "def outer():\n    global walk\n    def walk(): return walk\n",
+        "def outer(value):\n    class Owner:\n        def value(self): return value\n    return Owner\n",
+        "def outer():\n    walk = lambda walk: walk\n    return walk\n",
+        "def outer(flag, value):\n    walk, = ((lambda: value),) if flag else (None,)\n    return walk\n",
+        "def outer(flag, value):\n    [walk] = [None] if flag else [lambda: value]\n    return walk\n",
+        "def outer(flag):\n    walk, = flag and ((lambda walk: walk),)\n    return walk\n",
+        "def outer(flag, value):\n    [first, [second]] = [1, [None]] if flag else [1, flag or [lambda: value]]\n    return second\n",
+        "def outer(flag):\n    def walk(): return 1\n    first, = flag and (walk,)\n    [last] = [None] if flag else [first]\n    return last\n",
+        "walk = lambda: walk\n",
+        "def outer():\n    def walk(callback, n): return callback(callback, n - 1) if n else 1\n    return walk(walk, 3)\n",
+        "def outer():\n    def walk(): return other\n    other = 1\n    return walk\n",
+        "def outer():\n    def walk(): return 1\n    alias = walk\n    return alias\n",
+        "def outer():\n    first = lambda: 1\n    second = lambda: first\n    return second\n",
+        "def outer():\n    def make():\n        def walk(): return 1\n        return walk\n    return make\n",
+        "def outer():\n    def walk():\n        def child(walk): return walk\n        return child\n    return walk\n",
+        "def outer():\n    def walk():\n        class Child:\n            walk = 1\n            value = walk\n        return Child\n    return walk\n",
+        "class Owner:\n    def make(self):\n        def __walk(__walk): return __walk\n        return __walk\n",
+        "def outer():\n    global alias\n    def walk(): return alias\n    alias = walk\n",
+        "def outer():\n    def walk(): return alias\n    def child():\n        alias = walk\n        return alias\n    return child\n",
+        "def outer():\n    def walk():\n        def child():\n            walk = 1\n            return walk\n        return child\n    return walk\n",
+    };
+    for (int32_t optimize = 0; optimize < 3; ++optimize) {
+        test_allocator_state_t state = {0U, 0U};
+        tinypy_vm_t *vm = __test_vm_create(&state, optimize);
+        tinypy_compile_options_t options;
+
+        tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+        for (size_t index = 0U; index < sizeof(rejected) / sizeof(rejected[0]); ++index) {
+            tinypy_error_t *error = NULL;
+            tinypy_value_t *code = tinypy_compile_source(vm, rejected[index].source, strlen(rejected[index].source), "self_capture.py", 15U, &options, &error);
+            size_t message_size;
+            size_t filename_size;
+
+            assert(code == NULL && error != NULL);
+            assert(tinypy_error_kind(error) == TINYPY_ERROR_SYNTAX);
+            const char *message = tinypy_error_message(error, &message_size);
+            assert(message_size == strlen(rejected[index].message));
+            assert(memcmp(message, rejected[index].message, message_size) == 0);
+            assert(tinypy_error_line_number(error) == rejected[index].line);
+            const char *filename = tinypy_error_logical_filename(error, &filename_size);
+            assert(filename_size == 15U && memcmp(filename, "self_capture.py", 15U) == 0);
+            tinypy_error_release(error);
+        }
+        for (size_t index = 0U; index < sizeof(accepted) / sizeof(accepted[0]); ++index) {
+            tinypy_error_t *error = NULL;
+            tinypy_value_t *code = tinypy_compile_source(vm, accepted[index], strlen(accepted[index]), "capture_allowed.py", 18U, &options, &error);
+
+            assert(code != NULL && error == NULL);
+            tinypy_release(code);
+        }
+        tinypy_vm_destroy(vm);
+        assert(state.allocations == 0U && state.bytes == 0U);
+    }
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_codegen_syntax_errors(void) {
     static const char delete_free[] = "def outer():\n    value = 1\n    def inner(): return value\n    del value\n";
     static const char delete_message[] = "can not delete variable 'value' referenced in nested scope";
@@ -3358,6 +3465,9 @@ int main(void) {
         return EXIT_FAILURE;
     }
     if (__test_symtable_and_ast_error_messages() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_function_self_capture() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_codegen_syntax_errors() != 0) {

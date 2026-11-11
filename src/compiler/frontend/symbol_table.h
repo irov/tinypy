@@ -8,6 +8,7 @@ typedef enum tinypy_symbol_block_e {
 } tinypy_symbol_block_e;
 
 typedef struct tinypy_symbol_table_t tinypy_symbol_table_t;
+typedef struct tinypy_symbol_binding_t tinypy_symbol_binding_t;
 
 typedef struct tinypy_symbol_entry_t {
     tinypy_value_t *id;
@@ -16,6 +17,7 @@ typedef struct tinypy_symbol_entry_t {
     tinypy_value_t *name;
     tinypy_value_t *variable_names;
     tinypy_value_t *children;
+    tinypy_symbol_binding_t *bindings;
     tinypy_symbol_block_e block_type;
     int32_t unoptimized;
     tinypy_bool_t nested;

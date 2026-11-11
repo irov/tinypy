@@ -48,6 +48,7 @@ if(BUILD_TESTING)
         exception_reraise
         finalizer_runtime
         functools_runtime
+        function_self_capture_runtime
         generator
         import_semantics_runtime
         legacy_slice_runtime

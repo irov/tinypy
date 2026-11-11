@@ -27,6 +27,7 @@
   "cli_runtime_exception_override",
   "cli_runtime_exception_reraise",
   "cli_runtime_finalizer_runtime",
+  "cli_runtime_function_self_capture_runtime",
   "cli_runtime_functools_runtime",
   "cli_runtime_generator",
   "cli_runtime_import_semantics_runtime",

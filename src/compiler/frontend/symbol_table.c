@@ -5,6 +5,13 @@
 #include "codegen.h"
 #include "symbol_table.h"
 
+struct tinypy_symbol_binding_t {
+    tinypy_symbol_binding_t *next;
+    tinypy_value_t *name;
+    tinypy_value_t *source;
+    tinypy_symbol_entry_t *function;
+};
+
 /* error strings used for warnings */
 #define TINYPY_SYMBOL_GLOBAL_AFTER_ASSIGN \
     "name '%.400s' is assigned to before global declaration"
@@ -59,6 +66,7 @@ static tinypy_symbol_entry_t *__tinypy_symbol_entry_new(tinypy_symbol_table_t *s
         return NULL;
     }
 
+    ste->bindings = NULL;
     ste->block_type = block;
     ste->unoptimized = 0;
     ste->nested = 0;
@@ -92,6 +100,79 @@ static tinypy_symbol_entry_t *__tinypy_symbol_entry_from_handle(tinypy_value_t *
     return entry;
 }
 
+/* A local binding and the function that captures it must not own one another.
+   This is a source-language restriction; refcount operations stay constant time. */
+static tinypy_bool_t __tinypy_symbol_check_self_capture(tinypy_symbol_entry_t *entry) {
+    for (tinypy_symbol_binding_t *binding = entry->bindings; binding != NULL; binding = binding->next) {
+        tinypy_symbol_entry_t *function = binding->function;
+
+        if (function == NULL) {
+            continue;
+        }
+        if (!function->has_free_variables && !function->child_has_free_variables) {
+            continue;
+        }
+        int32_t binding_scope = __tinypy_symbol_table_scope(entry, binding->name);
+        if (binding_scope != TINYPY_SYMBOL_SCOPE_LOCAL && binding_scope != TINYPY_SYMBOL_SCOPE_CELL) {
+            continue;
+        }
+        tinypy_value_t *names = __tinypy_frontend_dict_new_from_owner(entry->symbols);
+        if (names == NULL) {
+            return TINYPY_FALSE;
+        }
+        if (TINYPY_COMPILER_DICT_SET_ITEM(names, binding->name, function->handle) < 0) {
+            TINYPY_COMPILER_DECREF(names);
+            return TINYPY_FALSE;
+        }
+        /* Include direct aliases transitively. This deliberately checks lexical
+           bindings rather than trying to predict branches or later rebinding. */
+        tinypy_bool_t changed;
+        do {
+            changed = TINYPY_FALSE;
+            for (tinypy_symbol_binding_t *alias = entry->bindings; alias != NULL; alias = alias->next) {
+                if (alias->source == NULL) {
+                    continue;
+                }
+                if (TINYPY_COMPILER_DICT_GET_ITEM(names, alias->source) == NULL) {
+                    continue;
+                }
+                if (TINYPY_COMPILER_DICT_GET_ITEM(names, alias->name) != NULL) {
+                    continue;
+                }
+                int32_t scope = __tinypy_symbol_table_scope(entry, alias->name);
+                if (scope != TINYPY_SYMBOL_SCOPE_LOCAL && scope != TINYPY_SYMBOL_SCOPE_CELL) {
+                    continue;
+                }
+                if (TINYPY_COMPILER_DICT_SET_ITEM(names, alias->name, function->handle) < 0) {
+                    TINYPY_COMPILER_DECREF(names);
+                    return TINYPY_FALSE;
+                }
+                changed = TINYPY_TRUE;
+            }
+        } while (changed);
+
+        tinypy_compiler_size_t position = 0;
+        tinypy_value_t *name;
+        tinypy_value_t *handle;
+        while (TINYPY_COMPILER_DICT_NEXT(names, &position, &name, &handle)) {
+            if (__tinypy_symbol_table_scope(function, name) != TINYPY_SYMBOL_SCOPE_FREE) {
+                continue;
+            }
+            static const char prefix[] = "local function '";
+            static const char middle[] = "' captures its own binding '";
+            static const char suffix[] = "'; use a method or pass the function explicitly";
+            const char *parts[] = {prefix, TINYPY_COMPILER_STRING_AS_STRING(function->name), middle, TINYPY_COMPILER_STRING_AS_STRING(name), suffix};
+            size_t sizes[] = {sizeof(prefix) - 1U, (size_t)TINYPY_COMPILER_STRING_GET_SIZE(function->name), sizeof(middle) - 1U, (size_t)TINYPY_COMPILER_STRING_GET_SIZE(name), sizeof(suffix) - 1U};
+
+            tinypy_internal_compiler_semantic_error_parts(entry->table->arena, parts, sizes, sizeof(parts) / sizeof(parts[0]), function->line_number, TINYPY_TRUE);
+            TINYPY_COMPILER_DECREF(names);
+            return TINYPY_FALSE;
+        }
+        TINYPY_COMPILER_DECREF(names);
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_symbol_analyze(tinypy_symbol_table_t *st);
 static tinypy_bool_t __tinypy_symbol_warn(tinypy_symbol_table_t *st, tinypy_value_t *warn, const char *msg, int32_t lineno);
 static tinypy_bool_t __tinypy_symbol_enter_block(tinypy_symbol_table_t *st, tinypy_ast_identifier_t name, tinypy_symbol_block_e block, void *ast, int32_t lineno);
@@ -670,6 +751,9 @@ static tinypy_bool_t __analyze_block(tinypy_symbol_entry_t *ste, tinypy_value_t 
                           ste->block_type == TINYPY_SYMBOL_BLOCK_CLASS)) {
         goto error;
     }
+    if (!__tinypy_symbol_check_self_capture(ste)) {
+        goto error;
+    }
     if (!__check_unoptimized(ste)) {
         goto error;
     }
@@ -987,6 +1071,84 @@ error:
         }                                                                                                                                        \
     }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_symbol_add_binding(tinypy_symbol_table_t *st, tinypy_value_t *name, tinypy_value_t *source, tinypy_symbol_entry_t *function) {
+    if (st->current->block_type != TINYPY_SYMBOL_BLOCK_FUNCTION) {
+        return TINYPY_TRUE;
+    }
+    tinypy_symbol_binding_t *binding = (tinypy_symbol_binding_t *)TINYPY_COMPILER_ARENA_MALLOC(st->arena, sizeof(*binding));
+    if (binding == NULL) {
+        return TINYPY_FALSE;
+    }
+    binding->name = __tinypy_frontend_mangle(st->arena, st->private_name, name);
+    if (!__tinypy_symbol_arena_value(st, binding->name)) {
+        return TINYPY_FALSE;
+    }
+    binding->source = NULL;
+    if (source != NULL) {
+        binding->source = __tinypy_frontend_mangle(st->arena, st->private_name, source);
+        if (!__tinypy_symbol_arena_value(st, binding->source)) {
+            return TINYPY_FALSE;
+        }
+    }
+    binding->function = function;
+    binding->next = st->current->bindings;
+    st->current->bindings = binding;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_symbol_assign_binding(tinypy_symbol_table_t *st, tinypy_ast_expression_t target, tinypy_ast_expression_t value) {
+    if (st->current->block_type != TINYPY_SYMBOL_BLOCK_FUNCTION) {
+        return TINYPY_TRUE;
+    }
+    if (value->kind == TINYPY_AST_KIND_BOOL_OP) {
+        for (int32_t index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(value->v.BoolOp.values); ++index) {
+            tinypy_ast_expression_t item = (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(value->v.BoolOp.values, index);
+            if (!__tinypy_symbol_assign_binding(st, target, item)) {
+                return TINYPY_FALSE;
+            }
+        }
+        return TINYPY_TRUE;
+    }
+    if (value->kind == TINYPY_AST_KIND_IF_EXP) {
+        if (!__tinypy_symbol_assign_binding(st, target, value->v.IfExp.body)) {
+            return TINYPY_FALSE;
+        }
+        tinypy_bool_t result = __tinypy_symbol_assign_binding(st, target, value->v.IfExp.orelse);
+        return result;
+    }
+    if (target->kind == TINYPY_AST_KIND_NAME) {
+        if (value->kind == TINYPY_AST_KIND_LAMBDA) {
+            tinypy_symbol_entry_t *function = __tinypy_symbol_table_lookup(st, value);
+            tinypy_bool_t result = __tinypy_symbol_add_binding(st, target->v.Name.id, NULL, function);
+            return result;
+        }
+        if (value->kind == TINYPY_AST_KIND_NAME) {
+            tinypy_bool_t result = __tinypy_symbol_add_binding(st, target->v.Name.id, value->v.Name.id, NULL);
+            return result;
+        }
+        return TINYPY_TRUE;
+    }
+    if (target->kind != TINYPY_AST_KIND_TUPLE && target->kind != TINYPY_AST_KIND_LIST) {
+        return TINYPY_TRUE;
+    }
+    if (value->kind != TINYPY_AST_KIND_TUPLE && value->kind != TINYPY_AST_KIND_LIST) {
+        return TINYPY_TRUE;
+    }
+    tinypy_ast_sequence_t *targets = target->kind == TINYPY_AST_KIND_TUPLE ? target->v.Tuple.elts : target->v.List.elts;
+    tinypy_ast_sequence_t *values = value->kind == TINYPY_AST_KIND_TUPLE ? value->v.Tuple.elts : value->v.List.elts;
+    if (TINYPY_AST_SEQUENCE_LENGTH(targets) != TINYPY_AST_SEQUENCE_LENGTH(values)) {
+        return TINYPY_TRUE;
+    }
+    for (int32_t index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(targets); ++index) {
+        tinypy_ast_expression_t item_target = (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(targets, index);
+        tinypy_ast_expression_t item_value = (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(values, index);
+        if (!__tinypy_symbol_assign_binding(st, item_target, item_value)) {
+            return TINYPY_FALSE;
+        }
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_symbol_visit_stmt(tinypy_symbol_table_t *st, tinypy_ast_statement_t s) {
     switch (s->kind) {
     case TINYPY_AST_KIND_FUNCTION_DEF:
@@ -1006,6 +1168,10 @@ static tinypy_bool_t __tinypy_symbol_visit_stmt(tinypy_symbol_table_t *st, tinyp
         TINYPY_SYMBOL_VISIT_IN_BLOCK(st, arguments, s->v.FunctionDef.args, s);
         TINYPY_SYMBOL_VISIT_SEQUENCE_IN_BLOCK(st, stmt, s->v.FunctionDef.body, s);
         if (!__tinypy_symbol_exit_block(st, s)) {
+            return TINYPY_FALSE;
+        }
+        tinypy_symbol_entry_t *function = __tinypy_symbol_table_lookup(st, s);
+        if (!__tinypy_symbol_add_binding(st, s->v.FunctionDef.name, NULL, function)) {
             return TINYPY_FALSE;
         }
         break;
@@ -1047,6 +1213,12 @@ static tinypy_bool_t __tinypy_symbol_visit_stmt(tinypy_symbol_table_t *st, tinyp
     case TINYPY_AST_KIND_ASSIGN:
         TINYPY_SYMBOL_VISIT_SEQUENCE(st, expr, s->v.Assign.targets);
         TINYPY_SYMBOL_VISIT(st, expr, s->v.Assign.value);
+        for (int32_t index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(s->v.Assign.targets); ++index) {
+            tinypy_ast_expression_t target = (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(s->v.Assign.targets, index);
+            if (!__tinypy_symbol_assign_binding(st, target, s->v.Assign.value)) {
+                return TINYPY_FALSE;
+            }
+        }
         break;
     case TINYPY_AST_KIND_AUG_ASSIGN:
         TINYPY_SYMBOL_VISIT(st, expr, s->v.AugAssign.target);
