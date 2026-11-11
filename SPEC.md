@@ -1228,6 +1228,73 @@ bits, and strings and sequences cannot exceed `max_preprocessor_bytes`;
 exceeding a limit is a compile error. Without a build profile, the
 preprocessor defines no constants.
 
+The preprocessor also replaces the immutable builtin `__debug__` with a bool
+literal derived from the compile optimize level. Conditions such as
+`if __debug__ is True and runtime_flag is True:` lose their body at optimize
+`1` and `2`; an ordinary `else` is retained. Boolean conditions can fold a
+decisive constant prefix, preserving short-circuit order. For example,
+`__debug__ and callback()` skips the callback in optimized code, whereas
+`callback() and __debug__` still calls it.
+
+Hosts can supply `TINYPY_BUILD_VALUE_DEBUG_FLAG` entries in the same profile
+to mark runtime boolean names such as `_DEVELOPMENT`. These entries have no
+value fields and cannot occur inside tuples. Unlike literal build constants,
+their names accept ASCII Python identifiers, excluding keywords, `None`,
+`True`, `False`, `__debug__`, and the synthesized `__NDEBUG__`.
+
+With `TINYPY_COMPILE_FEATURE_PREPROCESSOR` enabled:
+
+- Optimize `0` preserves reads and bindings of these flags at runtime. A flag
+  can be either `True` or `False` and can change between executions.
+- Optimize `1` and `2` remove an entire `if` when its test contains a bare-name
+  read of a registered flag, including all of that `if`'s `elif` and `else`
+  suites and any calls in the test. This applies to negation and `or` as well;
+  it is a lexical removal rule, rather than substitution with `False`.
+- Reads outside `if` tests remain runtime reads at every optimize level.
+  Attributes such as `object._DEVELOPMENT` and strings do not match. Matching
+  precedes name mangling and symbol analysis, so local names with the same
+  spelling also match. Removed bindings and yields contribute no symbols or
+  generator flag to their enclosing function.
+
+An `elif` is a nested `if` in the AST: if only its test uses a debug flag,
+that `elif` and its following alternatives disappear while earlier clauses
+remain. The flag list is copied into the immutable compile environment and
+included in the profile digest, so dynamic `compile`, `eval`, and `exec`
+inherit the same rules. With preprocessing disabled, the markers have no
+effect on source compilation.
+
+The host can attach that environment to marshal-loaded code and all nested
+code constants with `tinypy_code_set_compile_options`. The function copies
+the profile for subsequent dynamic compilation; it leaves existing bytecode
+unchanged. Invalid settings or allocation failure preserve the previous
+environment. Static debug blocks in serialized code must already have been
+removed when that code was compiled.
+
+For example, an embedding host can register `_DEVELOPMENT` when constructing
+its profile (and register additional flags with more entries in the array):
+
+```c
+tinypy_build_constant_t flags[1] = {0};
+flags[0].abi_version = TINYPY_COMPILER_ABI_VERSION;
+flags[0].struct_size = (uint32_t)sizeof(flags[0]);
+flags[0].name = "_DEVELOPMENT";
+flags[0].name_size = sizeof("_DEVELOPMENT") - 1U;
+tinypy_build_value_init(&flags[0].value, TINYPY_BUILD_VALUE_DEBUG_FLAG);
+
+tinypy_build_profile_t *profile = NULL;
+/* Check the result before using profile. */
+tinypy_build_profile_result_e status = tinypy_build_profile_create(
+    allocator, optimize_level, flags, 1U, NULL, &profile, NULL);
+
+tinypy_compile_options_t options;
+tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+options.optimize_level = optimize_level;
+options.feature_flags |= TINYPY_COMPILE_FEATURE_PREPROCESSOR;
+options.build_profile = profile;
+/* Pass options to tinypy_compile_source, then destroy the host profile
+   when it is no longer needed; compiled code owns its own copy. */
+```
+
 ## 11. Metatemplates
 
 With `TINYPY_COMPILE_FEATURE_META`, `meta` is a compiler builtin requiring

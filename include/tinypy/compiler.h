@@ -4,7 +4,7 @@
 #include "tinypy/vm.h"
 
 #define TINYPY_COMPILER_ABI_VERSION UINT32_C(1)
-#define TINYPY_PREPROCESSOR_ABI_VERSION UINT32_C(1)
+#define TINYPY_PREPROCESSOR_ABI_VERSION UINT32_C(2)
 #define TINYPY_META_ABI_VERSION UINT32_C(1)
 #define TINYPY_BUILD_PROFILE_DIGEST_SIZE ((size_t)32U)
 
@@ -88,6 +88,12 @@ struct tinypy_compile_options_t {
 
 void tinypy_compile_limits_init(tinypy_compile_limits_t *limits);
 void tinypy_compile_options_init(tinypy_compile_options_t *options, tinypy_compile_mode_e mode);
+/* Copy a compile environment onto code and its nested code constants, e.g.
+ * after marshal loading. This controls subsequent dynamic compilation; it
+ * does not rewrite existing bytecode. Invalid settings fail with TypeError;
+ * allocation refusal fails with MemoryError, leaving the old environment.
+ * The caller may destroy profile after this call. out_error is optional. */
+tinypy_bool_t tinypy_code_set_compile_options(tinypy_value_t *code, uint32_t feature_flags, int32_t optimize_level, const tinypy_build_profile_t *profile, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_compile_source(tinypy_vm_t *vm, const void *source, size_t source_size, const char *logical_filename, size_t filename_size, const tinypy_compile_options_t *options, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_eval_source(tinypy_vm_t *vm, const void *source, size_t source_size, const char *logical_filename, size_t filename_size, tinypy_value_t *globals, tinypy_value_t *locals, const tinypy_compile_options_t *options, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_exec_source(tinypy_vm_t *vm, const void *source, size_t source_size, const char *logical_filename, size_t filename_size, tinypy_value_t *globals, tinypy_value_t *locals, const tinypy_compile_options_t *options, tinypy_error_t **out_error);
@@ -100,7 +106,12 @@ typedef enum tinypy_build_value_type_e {
     TINYPY_BUILD_VALUE_FLOAT = 5,
     TINYPY_BUILD_VALUE_STRING = 6,
     TINYPY_BUILD_VALUE_UNICODE = 7,
-    TINYPY_BUILD_VALUE_TUPLE = 8
+    TINYPY_BUILD_VALUE_TUPLE = 8,
+    /* A top-level name marker, with no value fields. With PREPROCESSOR,
+     * optimize 0 leaves this name at runtime; optimize 1/2 removes each
+     * entire if whose test reads it, including its elif/else suites.
+     * Outside if tests the name remains at runtime at every level. */
+    TINYPY_BUILD_VALUE_DEBUG_FLAG = 9
 } tinypy_build_value_type_e;
 
 /* One flat, ABI-extensible descriptor is used recursively for tuple items.
@@ -181,6 +192,9 @@ tinypy_bool_t tinypy_preprocessor_name_is_reserved(const char *name, size_t name
 
 /* __NDEBUG__ is synthesized from optimize_level and must not be supplied by
  * the caller. Input order never affects the resulting sorted profile/digest.
+ * DEBUG_FLAG names accept ASCII Python identifiers (excluding keywords,
+ * None, True, False and __debug__); other values require reserved names.
+ * Debug flags are lexical markers, including when a local shadows the name.
  * A request that allocator refuses fails the call with
  * TINYPY_BUILD_PROFILE_LIMIT_EXCEEDED, everything it allocated released.
  * limits and out_error are optional. */

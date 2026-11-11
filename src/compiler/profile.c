@@ -142,6 +142,37 @@ tinypy_bool_t tinypy_preprocessor_name_is_reserved(const char *name, size_t name
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_profile_debug_flag_name_valid(const char *name, size_t name_size) {
+    static const char *const excluded[] = {
+        "and", "as", "assert", "break", "class", "continue", "def", "del",
+        "elif", "else", "except", "exec", "finally", "for", "from", "global",
+        "if", "import", "in", "is", "lambda", "not", "or", "pass", "print",
+        "raise", "return", "try", "while", "with", "yield",
+        "None", "True", "False", "__debug__"
+    };
+    size_t index;
+
+    if (name_size == 0U) {
+        return TINYPY_FALSE;
+    }
+    for (index = 0U; index < name_size; ++index) {
+        char character = name[index];
+        if ((character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z') || character == '_') {
+            continue;
+        }
+        if (index != 0U && character >= '0' && character <= '9') {
+            continue;
+        }
+        return TINYPY_FALSE;
+    }
+    for (index = 0U; index < sizeof(excluded) / sizeof(excluded[0]); ++index) {
+        if (strlen(excluded[index]) == name_size && memcmp(excluded[index], name, name_size) == 0) {
+            return TINYPY_FALSE;
+        }
+    }
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_profile_add_size(size_t left, size_t right, size_t *out) {
     if (right > SIZE_MAX - left) {
         return TINYPY_FALSE;
@@ -291,6 +322,12 @@ static tinypy_build_profile_result_e __tinypy_profile_copy_value(tinypy_build_pr
 
     switch ((tinypy_build_value_type_e)source->type) {
     case TINYPY_BUILD_VALUE_NONE:
+        return TINYPY_BUILD_PROFILE_OK;
+    case TINYPY_BUILD_VALUE_DEBUG_FLAG:
+        if (depth != 0U) {
+            result = __tinypy_profile_fail(error, TINYPY_BUILD_PROFILE_INVALID_VALUE_TYPE, constant_index, depth, "debug flags must be top-level profile entries");
+            return result;
+        }
         return TINYPY_BUILD_PROFILE_OK;
     case TINYPY_BUILD_VALUE_BOOL:
         if (source->integer_value != 0 && source->integer_value != 1) {
@@ -540,13 +577,17 @@ static tinypy_build_profile_result_e __tinypy_profile_copy_constant(tinypy_build
             "invalid build constant descriptor");
         return return_value_1;
     }
-    if (!tinypy_preprocessor_name_is_reserved(source->name, source->name_size)) {
+    tinypy_bool_t debug_flag = source->value.type == (uint32_t)TINYPY_BUILD_VALUE_DEBUG_FLAG;
+    tinypy_bool_t name_valid = debug_flag != 0
+        ? __tinypy_profile_debug_flag_name_valid(source->name, source->name_size)
+        : tinypy_preprocessor_name_is_reserved(source->name, source->name_size);
+    if (name_valid == 0) {
         tinypy_build_profile_result_e return_value_2 = __tinypy_profile_fail(
             error,
             TINYPY_BUILD_PROFILE_INVALID_NAME,
             index,
             0U,
-            "build constant name must match ^__[A-Z][A-Z0-9_]*__$");
+            debug_flag != 0 ? "debug flag name must be an ASCII Python identifier" : "build constant name must match ^__[A-Z][A-Z0-9_]*__$");
         return return_value_2;
     }
     if (__tinypy_profile_name_is_ndebug(source->name, source->name_size)) {
@@ -624,6 +665,7 @@ static void __tinypy_profile_digest_value(tinypy_sha256_context_t *context, cons
     __tinypy_profile_digest_u8(context, (uint8_t)value->type);
     switch ((tinypy_build_value_type_e)value->type) {
     case TINYPY_BUILD_VALUE_NONE:
+    case TINYPY_BUILD_VALUE_DEBUG_FLAG:
         break;
     case TINYPY_BUILD_VALUE_BOOL:
         __tinypy_profile_digest_u8(context, (uint8_t)value->integer_value);

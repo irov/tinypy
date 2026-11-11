@@ -72,6 +72,8 @@ typedef struct tinypy_compile_ctx_t {
     size_t generated_ast_nodes;
     size_t source_map_entries;
     uint32_t preprocessor_future_flags;
+    /* Reset for each if test; only bare-name loads set this marker. */
+    tinypy_bool_t preprocessor_debug_flag_seen;
     tinypy_bool_t source_is_unicode;
     tinypy_bool_t source_encoding_declared;
     tinypy_bool_t source_default_latin1;

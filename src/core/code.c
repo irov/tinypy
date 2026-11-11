@@ -350,6 +350,26 @@ tinypy_bool_t tinypy_internal_code_attach_compile_options(tinypy_value_t *code, 
     return TINYPY_TRUE;
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_code_set_compile_options(tinypy_value_t *code, uint32_t feature_flags, int32_t optimize_level, const tinypy_build_profile_t *profile, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(code);
+    uint32_t supported = (uint32_t)(TINYPY_COMPILE_FEATURE_PREPROCESSOR | TINYPY_COMPILE_FEATURE_META);
+    TINYPY_CLEAR_ERROR(out_error);
+    if (TINYPY_VALUE_KIND(code) != TINYPY_VALUE_CODE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "expected a code object", out_error);
+        return TINYPY_FALSE;
+    }
+    if ((feature_flags & ~supported) != 0U || optimize_level < 0 || optimize_level > 2) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "invalid code compile options", out_error);
+        return TINYPY_FALSE;
+    }
+    if (profile != NULL && tinypy_build_profile_optimize_level(profile) != optimize_level) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "code compile options and build profile optimize levels differ", out_error);
+        return TINYPY_FALSE;
+    }
+    tinypy_bool_t result = tinypy_internal_code_attach_compile_options(code, feature_flags, optimize_level, profile, out_error);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_bool_t tinypy_internal_compile_options_inherit_frame(tinypy_vm_t *vm, tinypy_compile_options_t *options) {
     if (vm->current_frame == NULL) {
         return TINYPY_FALSE;
