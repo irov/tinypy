@@ -1205,6 +1205,9 @@ static tinypy_bool_t __tinypy_preprocessor_statement_append_transformed(tinypy_c
             return TINYPY_FALSE;
         }
         if (ctx->options.optimize_level != 0 && ctx->preprocessor_debug_flag_seen != 0) {
+            if (__tinypy_preprocessor_sequence_append_transformed(ctx, builder, statement->v.If.orelse, future_flags) == 0) {
+                return TINYPY_FALSE;
+            }
             return TINYPY_TRUE;
         }
         int32_t truth = __tinypy_preprocessor_condition_truth(ctx, statement->v.If.test, future_flags);

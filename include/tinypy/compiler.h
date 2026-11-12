@@ -4,7 +4,7 @@
 #include "tinypy/vm.h"
 
 #define TINYPY_COMPILER_ABI_VERSION UINT32_C(1)
-#define TINYPY_PREPROCESSOR_ABI_VERSION UINT32_C(2)
+#define TINYPY_PREPROCESSOR_ABI_VERSION UINT32_C(3)
 #define TINYPY_META_ABI_VERSION UINT32_C(2)
 #define TINYPY_BUILD_PROFILE_DIGEST_SIZE ((size_t)32U)
 
@@ -108,8 +108,8 @@ typedef enum tinypy_build_value_type_e {
     TINYPY_BUILD_VALUE_UNICODE = 7,
     TINYPY_BUILD_VALUE_TUPLE = 8,
     /* A top-level name marker, with no value fields. With PREPROCESSOR,
-     * optimize 0 leaves this name at runtime; optimize 1/2 removes each
-     * entire if whose test reads it, including its elif/else suites.
+     * optimize 0 leaves this name at runtime; optimize 1/2 removes the test
+     * and body of each if whose test reads it, retaining elif/else alternatives.
      * Outside if tests the name remains at runtime at every level. */
     TINYPY_BUILD_VALUE_DEBUG_FLAG = 9
 } tinypy_build_value_type_e;

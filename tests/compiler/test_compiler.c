@@ -2832,9 +2832,28 @@ static int32_t __test_preprocessor_debug_flags(void) {
         "readback = _DEVELOPMENT\n"
         "exec 'if _DEVELOPMENT:\\n    events.append(10)\\nelse:\\n    events.append(11)\\n'\n"
         "dynamic = compile('if _DEVELOPMENT:\\n    events.append(12)\\nelse:\\n    events.append(13)\\n', '<dynamic>', 'exec', 0, True)\n"
-        "exec dynamic\n";
-    static const int64_t debug_events[] = {2, 3, 5, 90, 7, 1, 4, 5, 90, 6, 7, 18, 9, 93, 94, 17, 16, 14, 15, 10, 12};
-    static const int64_t release_events[] = {7, 7, 14, 15};
+        "exec dynamic\n"
+        "for ordinary_flag in (False, True):\n"
+        "    if _DEVELOPMENT:\n        events.append(20)\n    elif ordinary_flag:\n        events.append(21)\n    else:\n        events.append(22)\n"
+        "    if ordinary_flag:\n        events.append(23)\n    elif __QA__:\n        events.append(24)\n    elif _DEVELOPMENT:\n        events.append(25)\n    else:\n        events.append(26)\n"
+        "if _DEVELOPMENT:\n"
+        "    class TaskDescBase(object):\n        marker = 20\n"
+        "else:\n"
+        "    class TaskDescBase(object):\n        marker = 42\n"
+        "task_marker = TaskDescBase().marker\n"
+        "def local_class():\n"
+        "    if _DEVELOPMENT:\n        class LocalBase(object):\n            marker = 20\n"
+        "    else:\n        class LocalBase(object):\n            marker = 42\n"
+        "    return LocalBase.marker\n"
+        "local_marker = local_class()\n"
+        "class MethodGuard(object):\n"
+        "    def marker(self):\n"
+        "        if _DEVELOPMENT:\n            return 20\n        else:\n            retained = 42\n            return retained\n"
+        "method_marker = MethodGuard().marker()\n"
+        "def retained_generator():\n    if _DEVELOPMENT:\n        return\n    else:\n        yield 42\n"
+        "retained_yields = list(retained_generator())\n";
+    static const int64_t debug_events[] = {2, 3, 5, 90, 7, 1, 4, 5, 90, 6, 7, 18, 9, 93, 94, 17, 16, 14, 15, 10, 12, 20, 25, 20, 23};
+    static const int64_t release_events[] = {2, 4, 7, 2, 4, 7, 9, 93, 17, 17, 14, 15, 11, 13, 22, 26, 21, 23};
 
     for (int32_t optimize = 0; optimize <= 2; ++optimize) {
         test_allocator_state_t state = {0U, 0U};
@@ -2874,14 +2893,16 @@ static int32_t __test_preprocessor_debug_flags(void) {
         options.feature_flags = (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR;
         code = tinypy_compile_source(vm, guard, sizeof(guard) - 1U, "flags.py", 8U, &options, &error);
         assert(code != NULL && error == NULL);
-        assert((tinypy_tuple_size(tinypy_code_names(code)) == 0U) == (optimize != 0));
+        assert(tinypy_tuple_size(tinypy_code_names(code)) == (optimize == 0 ? 6U : 3U));
         tinypy_release(code);
         tinypy_preprocess_result_t *preprocessed = tinypy_preprocess_source(vm, guard, sizeof(guard) - 1U, "flags.py", 8U, &options, &error);
         assert(preprocessed != NULL && error == NULL);
         size_t expanded_size;
         const char *expanded = tinypy_preprocess_result_expanded_source(preprocessed, &expanded_size);
+        assert(expanded_size != 0U);
         if (optimize != 0) {
-            assert(expanded_size == 5U && memcmp(expanded, "pass\n", 5U) == 0);
+            assert(strstr(expanded, "_DEVELOPMENT") == NULL && strstr(expanded, "body_only") == NULL);
+            assert(strstr(expanded, "other_flag") != NULL && strstr(expanded, "elif_only") != NULL && strstr(expanded, "else_only") != NULL);
         }
         else {
             assert(strstr(expanded, "_DEVELOPMENT") != NULL && strstr(expanded, "else_only") != NULL);
@@ -2912,6 +2933,10 @@ static int32_t __test_preprocessor_debug_flags(void) {
         assert(local_code != NULL && generator_code != NULL);
         assert(tinypy_tuple_size(tinypy_code_varnames(local_code)) == (optimize == 0 ? 1U : 0U));
         assert(((tinypy_code_flags(generator_code) & TINYPY_CODE_GENERATOR) != 0U) == (optimize == 0));
+        tinypy_value_t *retained_generator_code = __test_find_nested_code(code, "retained_generator", 18U);
+        assert(retained_generator_code != NULL && (tinypy_code_flags(retained_generator_code) & TINYPY_CODE_GENERATOR) != 0U);
+        assert(__test_find_nested_code(code, "TaskDescBase", 12U) != NULL);
+        assert(__test_find_nested_code(code, "LocalBase", 9U) != NULL);
         tinypy_value_t *globals = tinypy_dict_new(vm);
         tinypy_value_t *result = tinypy_exec_code(code, globals, NULL, &error);
         assert(result != NULL && error == NULL);
@@ -2924,6 +2949,15 @@ static int32_t __test_preprocessor_debug_flags(void) {
             assert(tinypy_integer_as_i64(tinypy_list_get(events, index)) == expected[index]);
         }
         assert(tinypy_bool_as_i32(__test_dict_get(vm, globals, "readback", 8U)) != 0);
+        int64_t expected_marker = optimize == 0 ? 20 : 42;
+        assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "task_marker", 11U)) == expected_marker);
+        assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "local_marker", 12U)) == expected_marker);
+        assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "method_marker", 13U)) == expected_marker);
+        tinypy_value_t *retained_yields = __test_dict_get(vm, globals, "retained_yields", 15U);
+        assert(tinypy_list_size(retained_yields) == (optimize == 0 ? 0U : 1U));
+        if (optimize != 0) {
+            assert(tinypy_integer_as_i64(tinypy_list_get(retained_yields, 0U)) == 42);
+        }
         if (optimize != 0) {
             result = tinypy_eval_source(vm, "local_scope()", 13U, "flags.py", 8U, globals, NULL, &options, &error);
             assert(result != NULL && error == NULL && tinypy_integer_as_i64(result) == 41);

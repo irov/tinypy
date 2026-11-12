@@ -1246,9 +1246,10 @@ With `TINYPY_COMPILE_FEATURE_PREPROCESSOR` enabled:
 
 - Optimize `0` preserves reads and bindings of these flags at runtime. A flag
   can be either `True` or `False` and can change between executions.
-- Optimize `1` and `2` remove an entire `if` when its test contains a bare-name
-  read of a registered flag, including all of that `if`'s `elif` and `else`
-  suites and any calls in the test. This applies to negation and `or` as well;
+- Optimize `1` and `2` remove the test and body of an `if` when its test
+  contains a bare-name read of a registered flag. Its `elif` and `else`
+  alternatives are retained and preprocessed normally. Any calls in the
+  removed test are also dropped. This applies to negation and `or` as well;
   it is a lexical removal rule, rather than substitution with `False`.
 - Reads outside `if` tests remain runtime reads at every optimize level.
   Attributes such as `object._DEVELOPMENT` and strings do not match. Matching
@@ -1257,11 +1258,12 @@ With `TINYPY_COMPILE_FEATURE_PREPROCESSOR` enabled:
   generator flag to their enclosing function.
 
 An `elif` is a nested `if` in the AST: if only its test uses a debug flag,
-that `elif` and its following alternatives disappear while earlier clauses
-remain. The flag list is copied into the immutable compile environment and
-included in the profile digest, so dynamic `compile`, `eval`, and `exec`
-inherit the same rules. With preprocessing disabled, the markers have no
-effect on source compilation.
+that `elif`'s test and body disappear while earlier clauses and following
+alternatives remain. The flag list is copied into the immutable compile
+environment and included in the profile digest, so dynamic `compile`, `eval`,
+and `exec` inherit the same rules. With preprocessing disabled, the markers
+have no effect on source compilation. Preprocessor ABI `3` retains the
+alternatives that ABI `2` removed.
 
 The host can attach that environment to marshal-loaded code and all nested
 code constants with `tinypy_code_set_compile_options`. The function copies
