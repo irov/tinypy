@@ -449,6 +449,7 @@ typedef struct tinypy_intern_entry_t {
     X(internal_true_key, "True", 1) \
     X(internal_false_key, "False", 1) \
     X(internal_meta_name_key, "meta", 1) \
+    X(internal_meta_namespace_key, "<meta>", 1) \
     X(internal_meta_emit_key, "emit", 1) \
     X(internal_meta_rename_key, "rename", 1) \
     X(internal_meta_template_key, "template", 1) \

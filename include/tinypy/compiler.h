@@ -5,7 +5,7 @@
 
 #define TINYPY_COMPILER_ABI_VERSION UINT32_C(1)
 #define TINYPY_PREPROCESSOR_ABI_VERSION UINT32_C(2)
-#define TINYPY_META_ABI_VERSION UINT32_C(1)
+#define TINYPY_META_ABI_VERSION UINT32_C(2)
 #define TINYPY_BUILD_PROFILE_DIGEST_SIZE ((size_t)32U)
 
 /* Required pointers and typed/indexed accessors follow the tinypy C API

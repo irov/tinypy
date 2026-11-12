@@ -64,12 +64,16 @@ Trusted source can opt into two compiler-only features. The build
 preprocessor replaces reserved `__UPPERCASE__` names with immutable typed
 profile constants and removes fully decidable `if` branches before symbol
 analysis; a suite that becomes empty keeps a `pass` at its original line and
-an empty `else` disappears. The `meta` builtin expands valid Python 2
-declarations such as `@meta.template`, `@meta.emit(...)` and `meta.expand(...)`
-into ordinary classes and functions. Bare `@meta` is not a template marker.
-Neither profile constants nor `meta` exist in runtime globals. Both evaluators
-refuse constant results above 65536 bits or above the preprocessor byte limit
-before computing them.
+an empty `else` disappears. With the META feature enabled, explicit
+`@meta.template`, `@meta.emit(...)` and `@meta.expand(...)` directives generate
+ordinary classes and functions. They require no import and are removed before
+symbol analysis and runtime decorator application. All generation intrinsics,
+including `@meta.range(...)` and `@meta.concat(...)`, use the explicit prefix.
+The name `meta` otherwise remains an ordinary Python identifier; neither a
+builtin value nor a runtime module is installed. Bare `@meta` is an ordinary
+decorator, not a template marker. Profile constants do not exist in runtime
+globals. Both evaluators refuse constant results above 65536 bits or above
+the preprocessor byte limit before computing them.
 
 Every compiled code graph owns an immutable compile environment containing its
 feature flags, optimize level and an optional deep-copied build profile. String

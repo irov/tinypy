@@ -3329,14 +3329,14 @@ static int32_t __test_preprocess_renderer_chains(void) {
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __test_meta_template(void) {
-    static const char source[] = "class Base(object):\n    def initialize(self):\n        self.base = 1\n\n@meta.template\ndef ObjectTemplate(TypeName):\n    ClassName = meta.concat('Mixin', TypeName)\n\n    @meta.emit(name=ClassName)\n    class Generated(Base):\n        def initialize(self):\n            super(meta.current_class(), self).initialize()\n            meta.setattr(self, TypeName, 42)\n\n@meta.template\ndef PairTemplate(Prefix):\n    Items = meta.range(3)\n\n    @meta.emit(name=meta.concat(Prefix, 'Class'))\n    class GeneratedClass(object):\n        values = [value for value in (1, 2, 3)]\n        items = Items\n        pair = (Prefix, Items)\n\n    @meta.emit(name=meta.concat(Prefix, 'Function'))\n    def generated_function():\n        return 7\n\nMixinItem = meta.expand(ObjectTemplate, 'Item')\nPairClass, PairFunction = meta.expand(PairTemplate, 'Pair')\nobj = MixinItem()\nobj.initialize()\ndynamic = eval('40 + 2')\ndynamic_debug = eval('__debug__')\nresult = (MixinItem.__name__, obj.Item, obj.base, dynamic, PairClass.values, PairFunction(), dynamic_debug, PairClass.items, PairClass.pair)\n";
+    static const char source[] = "class Base(object):\n    def initialize(self):\n        self.base = 1\n\n@meta.template\ndef ObjectTemplate(TypeName):\n    ClassName = @meta.concat('Mixin', TypeName)\n\n    @meta.emit(name=ClassName)\n    class Generated(Base):\n        def initialize(self):\n            super(@meta.current_class(), self).initialize()\n            @meta.setattr(self, TypeName, 42)\n\n@meta.template\ndef PairTemplate(Prefix):\n    Items = @meta.range(3)\n\n    @meta.emit(name=@meta.concat(Prefix, 'Class'))\n    class GeneratedClass(object):\n        values = [value for value in (1, 2, 3)]\n        items = Items\n        pair = (Prefix, Items)\n\n    @meta.emit(name=@meta.concat(Prefix, 'Function'))\n    def generated_function():\n        return 7\n\nMixinItem = @meta.expand(ObjectTemplate, 'Item')\nPairClass, PairFunction = @meta.expand(PairTemplate, 'Pair')\nobj = MixinItem()\nobj.initialize()\ndynamic = eval('40 + 2')\ndynamic_debug = eval('__debug__')\nresult = (MixinItem.__name__, obj.Item, obj.base, dynamic, PairClass.values, PairFunction(), dynamic_debug, PairClass.items, PairClass.pair)\n";
     static const char bare_meta_source[] = "@meta\ndef Template():\n    pass\n";
-    static const char invalid_source[] = "value = meta.unknown()\n";
-    static const char keyword_source[] = "@meta.template\ndef Template():\n    @meta.emit(name='class')\n    def generated():\n        pass\n\nmeta.expand(Template)\n";
+    static const char invalid_source[] = "value = @meta.range(1)\n";
+    static const char keyword_source[] = "@meta.template\ndef Template():\n    @meta.emit(name='class')\n    def generated():\n        pass\n\n@meta.expand(Template)\n";
     static const char import_source[] = "import meta.submodule\n";
     static const char *const first_value_sources[] = {
-        "@meta.template\ndef Template():\n    @meta.emit(name=meta.concat('Name'))\n    def generated():\n        pass\n\nmeta.expand(Template)\n",
-        "@meta.template\ndef Template():\n    for index in meta.range(3):\n        pass\n\n    @meta.emit\n    def generated():\n        pass\n\nmeta.expand(Template)\n"};
+        "@meta.template\ndef Template():\n    @meta.emit(name=@meta.concat('Name'))\n    def generated():\n        pass\n\n@meta.expand(Template)\n",
+        "@meta.template\ndef Template():\n    for index in @meta.range(3):\n        pass\n\n    @meta.emit\n    def generated():\n        pass\n\n@meta.expand(Template)\n"};
     test_allocator_state_t state = {0U, 0U};
     tinypy_vm_t *vm;
     tinypy_compile_options_t options;
@@ -3369,7 +3369,7 @@ static int32_t __test_meta_template(void) {
     assert(execution_result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_COMPILER_LIMIT);
     tinypy_error_release(error);
     error = NULL;
-    /* The limits refuse the first value of meta.concat and meta.range too. */
+    /* The limits refuse the first value of @meta.concat and @meta.range too. */
     tinypy_compile_limits_init(&limits);
     limits.max_preprocessor_bytes = 1U;
     for (source_index = 0U; source_index < sizeof(first_value_sources) / sizeof(first_value_sources[0]); ++source_index) {
@@ -3386,7 +3386,7 @@ static int32_t __test_meta_template(void) {
     source_map = (const char *)tinypy_preprocess_result_source_map(preprocessed, &source_map_size);
     source_map_count = tinypy_preprocess_result_source_map_count(preprocessed);
     assert(expanded_size != 0U && strstr(expanded_source, "class MixinItem(Base):") != NULL);
-    assert(strstr(expanded_source, "@meta") == NULL && strstr(expanded_source, "meta.") == NULL);
+    assert(strstr(expanded_source, "meta.") == NULL && strstr(expanded_source, "<meta>") == NULL);
     assert(source_map_size > 21U && memcmp(source_map, "tinypy-source-map-v1\n", 21U) == 0);
     assert(source_map_count == 3U);
     tinypy_preprocess_result_source_map_at(preprocessed, 0U, &source_map_entry);
@@ -3420,13 +3420,13 @@ static int32_t __test_meta_template(void) {
     assert(execution_result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_META);
     tinypy_error_release(error);
     error = NULL;
-    execution_result = tinypy_compile_source(vm, import_source, sizeof(import_source) - 1U, "import_meta.py", 14U, &options, &error);
-    assert(execution_result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_META);
+    execution_result = tinypy_exec_source(vm, import_source, sizeof(import_source) - 1U, "import_meta.py", 14U, globals, NULL, &options, &error);
+    assert(execution_result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_IMPORT);
     tinypy_error_release(error);
     error = NULL;
     execution_result = tinypy_compile_source(vm, bare_meta_source, sizeof(bare_meta_source) - 1U, "bare_meta.py", 12U, &options, &error);
-    assert(execution_result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_META);
-    tinypy_error_release(error);
+    assert(execution_result != NULL && error == NULL);
+    tinypy_release(execution_result);
     error = NULL;
     execution_result = tinypy_compile_source(vm, invalid_source, sizeof(invalid_source) - 1U, "invalid_meta.py", 15U, &options, &error);
     assert(execution_result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_META);
@@ -3437,15 +3437,278 @@ static int32_t __test_meta_template(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-/* A generated name that a declaration or meta.setattr binds cannot be None
+static int32_t __test_meta_prefix(void) {
+    static const char *const sources[] = {
+        "def meta(meta, *args, **kwargs):\n"
+        "    return meta + 1\n"
+        "result = eval('meta(41)')\n",
+        "class meta(object):\n"
+        "    def expand(self, value):\n"
+        "        return value\n"
+        "meta = meta()\n"
+        "result = meta.expand(42)\n",
+        "from __builtin__ import len as meta\n"
+        "result = meta(range(42))\n",
+        "def meta():\n"
+        "    return 7\n"
+        "@meta.template\n"
+        "def T(Name):\n"
+        "    @meta.emit(name=Name)\n"
+        "    def generated():\n"
+        "        return 35\n"
+        "F = @meta.expand(T, 'answer')\n"
+        "result = F() + meta()\n",
+        "def meta(function):\n"
+        "    return function\n"
+        "@meta\n"
+        "def answer():\n"
+        "    return 42\n"
+        "result = answer()\n",
+        "order = []\n"
+        "def meta(function):\n"
+        "    order.append(function.__name__)\n"
+        "    def wrapped():\n"
+        "        return function() + 1\n"
+        "    return wrapped\n"
+        "@meta.template\n"
+        "def T():\n"
+        "    @meta.emit(name='answer')\n"
+        "    @meta\n"
+        "    def generated():\n"
+        "        return 41\n"
+        "F = @meta.expand(T)\n"
+        "result = F() if order == ['answer'] else 0\n",
+        "@meta.template\n"
+        "def T():\n"
+        "    @meta.emit\n"
+        "    @meta.rename(name='answer')\n"
+        "    def generated():\n"
+        "        return 42\n"
+        "F = @meta.expand(T)\n"
+        "result = F() if F.__name__ == 'answer' else 0\n",
+        "@meta.template\n"
+        "def T():\n"
+        "    @meta.emit(name='answer')\n"
+        "    def generated(meta):\n"
+        "        result = meta.expand(42)\n"
+        "        return result\n"
+        "class R(object):\n"
+        "    def expand(self, value):\n"
+        "        return value\n"
+        "F = @meta.expand(T)\n"
+        "result = F(R())\n",
+        "@meta.template\n"
+        "def T():\n"
+        "    Name = @meta.concat('A', @meta.concat('ns', 'wer'))\n"
+        "    for index in @meta.range(1):\n"
+        "        @meta.emit(name=Name)\n"
+        "        def generated():\n"
+        "            return 42\n"
+        "F = @meta.expand(T)\n"
+        "result = F()\n",
+        "@meta.template\n"
+        "def T():\n"
+        "    @meta.emit(name='answer')\n"
+        "    def generated():\n"
+        "        return 42\n"
+        "@meta.expand(T)\n"
+        "result = answer()\n",
+        "@ meta . template\n"
+        "def T(Name='answer'):\n"
+        "    @ meta . emit(name=Name)\n"
+        "    def generated():\n"
+        "        return 42\n"
+        "F = (@ meta . expand(T))\n"
+        "result = F()\n",
+        "@meta.template\n"
+        "def T(Name):\n"
+        "    @meta.emit(name=Name)\n"
+        "    def generated():\n"
+        "        return 42\n"
+        "F = @meta.expand(\n"
+        "    T,\n"
+        "    Name='answer',\n"
+        ")\n"
+        "result = F()\n",
+        "exec 'meta = object()'\n"
+        "@meta.template\n"
+        "def T():\n"
+        "    @meta.emit(name='answer')\n"
+        "    def generated():\n"
+        "        return 42\n"
+        "F = @meta.expand(T)\n"
+        "exec 'meta = 99'\n"
+        "result = F()\n",
+        "text = \"\"\"@meta.template\n"
+        "Player = @meta.expand(T)\n"
+        "\"\"\"\n"
+        "raw = r'@meta.concat'\n"
+        "wide = u'@meta.range'\n"
+        "# @meta.expand(NotATemplate)\n"
+        "result = 42 if text.startswith('@meta.template') and raw == '@meta.concat' and wide == '@meta.range' else 0\n",
+        "class D(object):\n"
+        "    def template(self, function):\n"
+        "        return function\n"
+        "metadata = D()\n"
+        "@metadata.template\n"
+        "def answer():\n"
+        "    return 42\n"
+        "result = answer()\n",
+        "class D(object):\n"
+        "    def template(self, function):\n"
+        "        return function\n"
+        "class O(object):\n"
+        "    pass\n"
+        "other = O()\n"
+        "other.meta = D()\n"
+        "@other.meta.template\n"
+        "def answer():\n"
+        "    return 42\n"
+        "result = answer()\n",
+        "import sys, __builtin__\n"
+        "result = 42 if 'meta' not in sys.builtin_module_names and not hasattr(__builtin__, 'meta') else 0\n"};
+
+    for (size_t index = 0U; index != sizeof(sources) / sizeof(sources[0]); ++index) {
+        test_allocator_state_t state = {0U, 0U};
+        tinypy_vm_t *vm = __test_vm_create(&state, 0);
+        tinypy_value_t *globals = tinypy_dict_new(vm);
+        tinypy_compile_options_t options;
+        tinypy_error_t *error = NULL;
+        size_t size = strlen(sources[index]);
+
+        tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+        options.feature_flags = (uint32_t)TINYPY_COMPILE_FEATURE_META;
+        tinypy_value_t *execution = tinypy_exec_source(vm, sources[index], size, "meta_prefix.py", 14U, globals, NULL, &options, &error);
+
+        if (error != NULL) {
+            const char *message = tinypy_error_message(error, NULL);
+            fprintf(stderr, "meta prefix case %zu: %s\n", index, message);
+        }
+        assert(execution != NULL && error == NULL);
+        tinypy_value_t *result = __test_dict_get(vm, globals, "result", 6U);
+        assert(tinypy_integer_as_i64(result) == 42);
+        tinypy_release(execution);
+        tinypy_dict_clear(globals);
+        tinypy_release(globals);
+        tinypy_vm_destroy(vm);
+        assert(state.allocations == 0U && state.bytes == 0U);
+    }
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_meta_prefix_errors(void) {
+    static const struct {
+        const char *source;
+        uint32_t features;
+        tinypy_error_kind_e kind;
+        int32_t column;
+        size_t max_tokens;
+    } cases[] = {
+        {"x = @meta.expand(T)\n", 0U, TINYPY_ERROR_SYNTAX, 5, 0U},
+        {"x = @meta.expand(T)\n", (uint32_t)TINYPY_COMPILE_FEATURE_META, TINYPY_ERROR_META, 5, 0U},
+        {"x = @meta.unknown()\n", (uint32_t)TINYPY_COMPILE_FEATURE_META, TINYPY_ERROR_META, 5, 0U},
+        {"x = @meta.range(2)\n", (uint32_t)TINYPY_COMPILE_FEATURE_META, TINYPY_ERROR_META, 5, 0U},
+        {"@meta.emit\ndef answer():\n    pass\n", (uint32_t)TINYPY_COMPILE_FEATURE_META, TINYPY_ERROR_META, 1, 0U},
+        {"@meta.template\nclass C(object):\n    pass\n", (uint32_t)TINYPY_COMPILE_FEATURE_META, TINYPY_ERROR_META, 1, 0U},
+        {"x = @@meta.expand(T)\n", (uint32_t)TINYPY_COMPILE_FEATURE_META, TINYPY_ERROR_SYNTAX, 5, 0U},
+        {"x = @other.expand(T)\n", (uint32_t)TINYPY_COMPILE_FEATURE_META, TINYPY_ERROR_SYNTAX, 5, 0U},
+        {"x = @meta\n", (uint32_t)TINYPY_COMPILE_FEATURE_META, TINYPY_ERROR_SYNTAX, 5, 0U},
+        {"x = 1 @meta.range(2)\n", (uint32_t)TINYPY_COMPILE_FEATURE_META, TINYPY_ERROR_SYNTAX, 7, 0U},
+        {"import @meta.x\n", (uint32_t)TINYPY_COMPILE_FEATURE_META, TINYPY_ERROR_META, 1, 0U},
+        {"import a.@meta.x as y\n", (uint32_t)TINYPY_COMPILE_FEATURE_META, TINYPY_ERROR_META, 1, 0U},
+        {"from @meta.x import y\n", (uint32_t)TINYPY_COMPILE_FEATURE_META, TINYPY_ERROR_META, 1, 0U},
+        {"from .@meta.x import y\n", (uint32_t)TINYPY_COMPILE_FEATURE_META, TINYPY_ERROR_META, 1, 0U},
+        {"o.@meta.x = 1\n", (uint32_t)TINYPY_COMPILE_FEATURE_META, TINYPY_ERROR_META, 1, 0U},
+        {"x = @meta.expand(T)\n", (uint32_t)TINYPY_COMPILE_FEATURE_META, TINYPY_ERROR_COMPILER_LIMIT, 5, 3U}};
+
+    for (size_t index = 0U; index != sizeof(cases) / sizeof(cases[0]); ++index) {
+        test_allocator_state_t state = {0U, 0U};
+        tinypy_vm_t *vm = __test_vm_create(&state, 0);
+        tinypy_compile_options_t options;
+        tinypy_compile_limits_t limits;
+        tinypy_error_t *error = NULL;
+        size_t size = strlen(cases[index].source);
+
+        tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+        options.feature_flags = cases[index].features;
+        tinypy_compile_limits_init(&limits);
+        if (cases[index].max_tokens != 0U) {
+            limits.max_tokens = cases[index].max_tokens;
+        }
+        options.limits = &limits;
+        tinypy_value_t *code = tinypy_compile_source(vm, cases[index].source, size, "meta_error.py", 13U, &options, &error);
+
+        assert(code == NULL && error != NULL);
+        assert(tinypy_error_kind(error) == cases[index].kind);
+        assert(tinypy_error_line_number(error) == 1);
+        assert(tinypy_error_column_offset(error) == cases[index].column);
+        tinypy_error_release(error);
+        tinypy_vm_destroy(vm);
+        assert(state.allocations == 0U && state.bytes == 0U);
+    }
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* META reads the tokens after an @ ahead of the parser. A source error in
+   them, or a prefix in a place that takes no expression, is reported as
+   without META, at the same place, end of file included. */
+static int32_t __test_meta_prefix_error_locations(void) {
+    static const char *const sources[] = {
+        "x = @ \"abc\n",
+        "x = @meta \"abc\n",
+        "@meta.\"abc\n",
+        "x = (@meta\n  + 1)\n",
+        "x = @meta.\n",
+        "x = 1 @meta.range(2)\n",
+        "x = 1\n@\\\n",
+        "x = 1\n@meta.\\"};
+
+    for (size_t index = 0U; index != sizeof(sources) / sizeof(sources[0]); ++index) {
+        test_allocator_state_t state = {0U, 0U};
+        tinypy_vm_t *vm = __test_vm_create(&state, 0);
+        tinypy_error_t *errors[2] = {NULL, NULL};
+        size_t size = strlen(sources[index]);
+
+        for (size_t variant = 0U; variant != 2U; ++variant) {
+            tinypy_compile_options_t options;
+
+            tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+            options.feature_flags = variant != 0U ? (uint32_t)TINYPY_COMPILE_FEATURE_META : 0U;
+            tinypy_value_t *code = tinypy_compile_source(vm, sources[index], size, "meta_error.py", 13U, &options, &errors[variant]);
+
+            assert(code == NULL && errors[variant] != NULL);
+        }
+        size_t message_size;
+        size_t meta_message_size;
+        size_t line_size;
+        size_t meta_line_size;
+        const char *message = tinypy_error_message(errors[0], &message_size);
+        const char *meta_message = tinypy_error_message(errors[1], &meta_message_size);
+        const char *line = tinypy_error_source_line(errors[0], &line_size);
+        const char *meta_line = tinypy_error_source_line(errors[1], &meta_line_size);
+
+        assert(tinypy_error_kind(errors[0]) == tinypy_error_kind(errors[1]));
+        assert(message_size == meta_message_size && memcmp(message, meta_message, message_size) == 0);
+        assert(line_size == meta_line_size && (line_size == 0U || memcmp(line, meta_line, line_size) == 0));
+        assert(tinypy_error_line_number(errors[0]) == tinypy_error_line_number(errors[1]));
+        assert(tinypy_error_column_offset(errors[0]) == tinypy_error_column_offset(errors[1]));
+        tinypy_error_release(errors[0]);
+        tinypy_error_release(errors[1]);
+        tinypy_vm_destroy(vm);
+        assert(state.allocations == 0U && state.bytes == 0U);
+    }
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* A generated name that a declaration or @meta.setattr binds cannot be None
    or __debug__, which Python 2 cannot assign; reading or deleting such an
    attribute stays valid, in the canonical source too. */
 static int32_t __test_meta_unassignable_names(void) {
     static const char *const bound_sources[] = {
-        "@meta.template\ndef T(Name):\n    @meta.emit(name=Name)\n    def generated():\n        pass\n\nmeta.expand(T, 'None')\n",
-        "@meta.template\ndef T(Name):\n    @meta.emit(name=Name)\n    class Generated(object):\n        pass\n\nmeta.expand(T, '__debug__')\n",
-        "@meta.template\ndef T(Name):\n    @meta.emit(name='g')\n    def generated(target):\n        meta.setattr(target, Name, 1)\n\nmeta.expand(T, 'None')\n"};
-    static const char read_source[] = "class O(object):\n    pass\no = O()\no.__dict__['None'] = 5\n@meta.template\ndef T(Name):\n    @meta.emit(name='g')\n    def generated(target):\n        value = meta.getattr(target, Name), meta.name(Name)\n        meta.delattr(target, Name)\n        return value\n\nG = meta.expand(T, 'None')\nresult = G(o), len(o.__dict__)\n";
+        "@meta.template\ndef T(Name):\n    @meta.emit(name=Name)\n    def generated():\n        pass\n\n@meta.expand(T, 'None')\n",
+        "@meta.template\ndef T(Name):\n    @meta.emit(name=Name)\n    class Generated(object):\n        pass\n\n@meta.expand(T, '__debug__')\n",
+        "@meta.template\ndef T(Name):\n    @meta.emit(name='g')\n    def generated(target):\n        @meta.setattr(target, Name, 1)\n\n@meta.expand(T, 'None')\n"};
+    static const char read_source[] = "class O(object):\n    pass\no = O()\no.__dict__['None'] = 5\n@meta.template\ndef T(Name):\n    @meta.emit(name='g')\n    def generated(target):\n        value = @meta.getattr(target, Name), @meta.name(Name)\n        @meta.delattr(target, Name)\n        return value\n\nG = @meta.expand(T, 'None')\nresult = G(o), len(o.__dict__)\n";
     test_allocator_state_t state = {0U, 0U};
     tinypy_vm_t *vm = __test_vm_create(&state, 0);
     tinypy_value_t *globals = tinypy_dict_new(vm);
@@ -3487,11 +3750,11 @@ static int32_t __test_meta_unassignable_names(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-/* meta.range grows its list through the heap: a host that refuses any
+/* @meta.range grows its list through the heap: a host that refuses any
    allocation the size of its storage fails the compilation with MemoryError,
    one allocation at a time, until the compilation needs none it refuses. */
 static int32_t __test_meta_range_allocation_failure(void) {
-    static const char source[] = "@meta.template\ndef Template():\n    for index in meta.range(200):\n        pass\n\n    @meta.emit\n    def generated():\n        return 7\n\nmeta.expand(Template)\nresult = generated()\n";
+    static const char source[] = "@meta.template\ndef Template():\n    for index in @meta.range(200):\n        pass\n\n    @meta.emit\n    def generated():\n        return 7\n\n@meta.expand(Template)\nresult = generated()\n";
     test_failing_allocator_state_t state = {{0U, 0U}, 0U, 0U, 0U};
     tinypy_vm_t *vm = __test_failing_vm_create(&state, 0U);
     tinypy_value_t *globals = tinypy_dict_new(vm);
@@ -3768,6 +4031,15 @@ int main(void) {
         return EXIT_FAILURE;
     }
     if (__test_meta_template() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_meta_prefix() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_meta_prefix_errors() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_meta_prefix_error_locations() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_meta_unassignable_names() != 0) {
