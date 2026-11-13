@@ -1218,6 +1218,11 @@ and comprehension targets still undergo substitution; the container itself
 remains mutable. Without preprocessing the profile has no effect on source
 compilation.
 
+The preprocessing flag is independent of the build profile, including in module
+artifacts: it can simplify compound `__debug__` conditions with no profile or an
+empty one. A supplied profile is permitted when the flag is disabled; its names
+remain runtime reads in source and inherited dynamic compilation.
+
 The profile deeply copies all inputs through the host allocator. Allocation
 refusal ends `tinypy_build_profile_create` with
 `TINYPY_BUILD_PROFILE_LIMIT_EXCEEDED`, releasing allocated storage. Input order

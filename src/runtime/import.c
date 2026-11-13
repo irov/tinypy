@@ -267,9 +267,6 @@ static tinypy_bool_t __tinypy_import_artifact_valid(const tinypy_module_artifact
         if (artifact->compile_optimize_level < 0 || artifact->compile_optimize_level > 2 || (artifact->compile_feature_flags & ~compile_features) != 0U) {
             return TINYPY_FALSE;
         }
-        if (((artifact->compile_feature_flags & (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR) != 0U) != (artifact->build_profile != NULL)) {
-            return TINYPY_FALSE;
-        }
     }
     return TINYPY_TRUE;
 }

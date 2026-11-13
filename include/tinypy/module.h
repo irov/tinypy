@@ -50,6 +50,9 @@ struct tinypy_module_artifact_t {
     size_t package_token_size;
     tinypy_native_module_initialize_t native_initialize;
     void *native_user_data;
+    /* Explicit compile features are independent of build_profile. Preprocessing
+     * can simplify __debug__ without a profile; clearing its bit disables
+     * substitution even if a profile is supplied. */
     uint32_t compile_feature_flags;
     int32_t compile_optimize_level;
     const tinypy_build_profile_t *build_profile;

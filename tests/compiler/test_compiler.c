@@ -4208,6 +4208,85 @@ static int32_t __test_meta_range_allocation_failure(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+static int32_t __test_import_preprocessor_configuration(void) {
+    static const char source[] = "value = eval('_DEVELOPMENT')\nnames = compile('if __debug__ is True:\\n    debug_only()\\nelse:\\n    release_only()\\n', '<dynamic>', 'exec', 0, True).co_names\n";
+    for (int32_t optimize = 0; optimize <= 2; ++optimize) {
+        for (int32_t enabled = 0; enabled <= 1; ++enabled) {
+            for (int32_t supplied = 0; supplied <= 1; ++supplied) {
+                test_allocator_state_t state = {0U, 0U};
+                test_source_host_t host;
+                (void)memset(&host, 0, sizeof(host));
+                host.artifact.abi_version = TINYPY_ABI_VERSION;
+                host.artifact.struct_size = (uint32_t)sizeof(host.artifact);
+                host.artifact.content_kind = TINYPY_MODULE_CONTENT_SOURCE;
+                host.artifact.data = source;
+                host.artifact.data_size = sizeof(source) - 1U;
+                host.artifact.canonical_name = "source_config";
+                host.artifact.canonical_name_size = 13U;
+                host.artifact.logical_filename = "config.py";
+                host.artifact.logical_filename_size = 9U;
+                host.artifact.compile_feature_flags = enabled != 0 ? (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR : 0U;
+                host.artifact.compile_optimize_level = optimize;
+                tinypy_vm_t *vm = __test_vm_create_with_source_host(&state, &host);
+                tinypy_build_profile_t *profile = supplied != 0 ? __test_constant_profile(vm, 0) : NULL;
+                host.artifact.build_profile = profile;
+                tinypy_value_t *key = tinypy_string_from_bytes(vm, "_DEVELOPMENT", 12U);
+                tinypy_value_t *runtime = tinypy_bool_from_i32(vm, 1);
+                tinypy_dict_set(tinypy_vm_builtins(vm), key, runtime);
+                tinypy_release(runtime);
+                tinypy_release(key);
+                tinypy_compile_options_t options;
+                tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+                options.optimize_level = optimize;
+                tinypy_error_t *error = NULL;
+                tinypy_value_t *code = tinypy_compile_source(vm, source, sizeof(source) - 1U, "config.py", 9U, &options, &error);
+                assert(code != NULL && error == NULL);
+                size_t size;
+                assert(tinypy_marshal_dump_code_v2(code, NULL, 0U, &size, NULL, NULL) == TINYPY_MARSHAL_OK);
+                uint8_t *bytes = (uint8_t *)malloc(size);
+                assert(bytes != NULL);
+                assert(tinypy_marshal_dump_code_v2(code, bytes, size, &size, NULL, NULL) == TINYPY_MARSHAL_OK);
+                tinypy_release(code);
+                for (int32_t route = 0; route <= 1; ++route) {
+                    if (route != 0) {
+                        host.artifact.content_kind = TINYPY_MODULE_CONTENT_MARSHAL_V2;
+                        host.artifact.data = bytes;
+                        host.artifact.data_size = size;
+                        host.artifact.canonical_name = "marshal_config";
+                        host.artifact.canonical_name_size = 14U;
+                    }
+                    tinypy_value_t *module = tinypy_import_module(vm, host.artifact.canonical_name, host.artifact.canonical_name_size, NULL, NULL, 0, &error);
+                    assert(module != NULL && error == NULL);
+                    tinypy_value_t *globals = tinypy_module_dict(module);
+                    assert(tinypy_bool_as_i32(__test_dict_get(vm, globals, "value", 5U)) == (enabled != 0 && supplied != 0 ? 0 : 1));
+                    tinypy_value_t *names = __test_dict_get(vm, globals, "names", 5U);
+                    int32_t mask = 0;
+                    for (size_t index = 0U; index < tinypy_tuple_size(names); ++index) {
+                        size_t name_size;
+                        const char *name = (const char *)tinypy_string_view(tinypy_tuple_get(names, index), &name_size);
+                        if (name_size == 10U && memcmp(name, "debug_only", 10U) == 0) {
+                            mask |= 1;
+                        }
+                        if (name_size == 12U && memcmp(name, "release_only", 12U) == 0) {
+                            mask |= 2;
+                        }
+                    }
+                    assert(mask == (enabled != 0 ? (optimize == 0 ? 1 : 2) : 3));
+                    tinypy_release(module);
+                }
+                assert(host.resolve_count == 2U && host.release_count == 2U);
+                free(bytes);
+                if (profile != NULL) {
+                    tinypy_build_profile_destroy(profile);
+                }
+                tinypy_vm_destroy(vm);
+                assert(state.allocations == 0U && state.bytes == 0U);
+            }
+        }
+    }
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_compile_environment_imports(void) {
     static const char source[] = "value = __IMPORT_VALUE__\ndynamic = eval('__IMPORT_VALUE__ + 1')\n";
     test_allocator_state_t state = {0U, 0U};
@@ -4476,6 +4555,9 @@ int main(void) {
         return EXIT_FAILURE;
     }
     if (__test_meta_range_allocation_failure() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_import_preprocessor_configuration() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_compile_environment_imports() != 0) {
