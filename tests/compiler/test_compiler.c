@@ -2821,6 +2821,80 @@ static tinypy_allocator_t __test_counting_allocator(test_allocator_state_t *stat
     return allocator;
 }
 //////////////////////////////////////////////////////////////////////////
+static int32_t __test_constant_objects(void) {
+    static const struct {
+        const char *expression;
+        tinypy_build_value_type_e type;
+    } valid[] = {
+        {"None", TINYPY_BUILD_VALUE_NONE}, {"False", TINYPY_BUILD_VALUE_BOOL}, {"True", TINYPY_BUILD_VALUE_BOOL},
+        {"0", TINYPY_BUILD_VALUE_INTEGER}, {"-13", TINYPY_BUILD_VALUE_INTEGER},
+        {"123456789012345678901234567890L", TINYPY_BUILD_VALUE_LONG},
+        {"0.5", TINYPY_BUILD_VALUE_FLOAT}, {"-0.0", TINYPY_BUILD_VALUE_FLOAT},
+        {"'a\\x00b'", TINYPY_BUILD_VALUE_STRING}, {"u'\\u041f\\udc00'", TINYPY_BUILD_VALUE_UNICODE}
+    };
+    static const char *const invalid[] = {
+        "()", "(1,)", "(1, (2,))", "[]", "{}", "{1}", "1j", "Ellipsis", "object()", "lambda: False",
+        "type('I', (int,), {'__nonzero__': lambda self: 1/0})(1)",
+        "type('L', (long,), {})(1)", "type('F', (float,), {})(1)",
+        "type('S', (str,), {})('s')", "type('U', (unicode,), {})(u'u')"
+    };
+    test_allocator_state_t state = {0U, 0U};
+    test_allocator_state_t profile_state = {0U, 0U};
+    tinypy_allocator_t allocator = __test_counting_allocator(&profile_state);
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_compile_options_t options;
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EVAL);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    for (size_t index = 0U; index < sizeof(valid) / sizeof(valid[0]); ++index) {
+        tinypy_error_t *error = NULL;
+        const char *source = valid[index].expression;
+        tinypy_value_t *object = tinypy_eval_source(vm, source, strlen(source), "<constant>", 10U, globals, globals, &options, &error);
+        assert(object != NULL && error == NULL);
+        tinypy_build_constant_t constant;
+        (void)memset(&constant, 0, sizeof(constant));
+        constant.abi_version = TINYPY_COMPILER_ABI_VERSION;
+        constant.struct_size = (uint32_t)sizeof(constant);
+        constant.name = "CONTROL";
+        constant.name_size = 7U;
+        tinypy_ref_t references = tinypy_refcount(object);
+        assert(tinypy_build_value_from_object(object, &constant.value) != 0);
+        assert(tinypy_refcount(object) == references && constant.value.type == (uint32_t)valid[index].type);
+        tinypy_build_profile_t *profile = NULL;
+        assert(tinypy_build_profile_create(&allocator, &constant, 1U, NULL, &profile, NULL) == TINYPY_BUILD_PROFILE_OK);
+        const tinypy_build_value_t *copy;
+        assert(tinypy_build_profile_find(profile, "CONTROL", 7U, &copy) != 0 && copy->type == constant.value.type);
+        if (copy->data_size != 0U) {
+            assert(copy->data != constant.value.data && memcmp(copy->data, constant.value.data, copy->data_size) == 0);
+        }
+        if (copy->long_digit_count != 0U) {
+            assert(copy->long_digits != constant.value.long_digits && memcmp(copy->long_digits, constant.value.long_digits, copy->long_digit_count * sizeof(*copy->long_digits)) == 0);
+        }
+        tinypy_release(object);
+        tinypy_build_profile_destroy(profile);
+        assert(profile_state.allocations == 0U && profile_state.bytes == 0U);
+    }
+    tinypy_build_value_t sentinel;
+    tinypy_build_value_init(&sentinel, TINYPY_BUILD_VALUE_BOOL);
+    sentinel.integer_value = 1;
+    for (size_t index = 0U; index < sizeof(invalid) / sizeof(invalid[0]); ++index) {
+        tinypy_error_t *error = NULL;
+        const char *source = invalid[index];
+        tinypy_value_t *object = tinypy_eval_source(vm, source, strlen(source), "<constant>", 10U, globals, globals, &options, &error);
+        assert(object != NULL && error == NULL);
+        tinypy_build_value_t value = sentinel;
+        assert(tinypy_build_value_from_object(object, &value) == 0 && memcmp(&value, &sentinel, sizeof(value)) == 0);
+        assert(tinypy_vm_has_error(vm) == 0);
+        assert(tinypy_build_value_from_object(object, NULL) == 0);
+        tinypy_release(object);
+    }
+    tinypy_build_value_t value = sentinel;
+    assert(tinypy_build_value_from_object(NULL, &value) == 0 && memcmp(&value, &sentinel, sizeof(value)) == 0);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 static int32_t __test_constant_definitions(void) {
     static const char *const definitions[] = {
         "_DEVELOPMENT=False", "enabled=True", "nothing=None", "version=42",
@@ -4357,6 +4431,9 @@ int main(void) {
         return EXIT_FAILURE;
     }
     if (__test_constant_profiles() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_constant_objects() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_constant_definitions() != 0) {

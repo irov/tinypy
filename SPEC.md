@@ -1292,6 +1292,15 @@ tinypy_build_profile_result_e status = tinypy_build_profile_create(
     allocator, &constant, 1U, NULL, &profile, NULL);
 ```
 
+`tinypy_build_value_from_object` borrows an exact builtin `None`, bool,
+integer/long, float, byte string or Unicode value as a descriptor for
+`tinypy_build_profile_create`. The object must stay alive until the profile
+has copied its buffer/digit views. All other types, including scalar subclasses,
+are rejected without running conversions or user methods; the output descriptor
+is unchanged on failure. Profiles and compiled code own independent copies, so
+replacing a host profile affects subsequent compilations and marshal environment
+attachment, while existing code keeps its original compile environment.
+
 `tinypy_build_profile_parse` creates the same profile from `NAME=literal`
 strings, with the allocator, limits, result codes, and error report of
 `tinypy_build_profile_create`; `constant_index` names the failed definition.

@@ -109,6 +109,58 @@ void tinypy_build_value_init(tinypy_build_value_t *value, tinypy_build_value_typ
     value->type = (uint32_t)type;
 }
 //////////////////////////////////////////////////////////////////////////
+tinypy_bool_t tinypy_build_value_from_object(const tinypy_value_t *object, tinypy_build_value_t *out_value) {
+    tinypy_build_value_t value;
+    if (object == NULL) {
+        return TINYPY_FALSE;
+    }
+    if (out_value == NULL) {
+        return TINYPY_FALSE;
+    }
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(object);
+    if ((size_t)kind >= TINYPY_BUILTIN_TYPE_COUNT) {
+        return TINYPY_FALSE;
+    }
+    if (object->type != &TINYPY_VALUE_VM(object)->types[kind]) {
+        return TINYPY_FALSE;
+    }
+    switch (kind) {
+    case TINYPY_VALUE_NONE:
+        tinypy_build_value_init(&value, TINYPY_BUILD_VALUE_NONE);
+        break;
+    case TINYPY_VALUE_BOOL:
+        tinypy_build_value_init(&value, TINYPY_BUILD_VALUE_BOOL);
+        value.integer_value = tinypy_bool_as_i32(object);
+        break;
+    case TINYPY_VALUE_INTEGER:
+        tinypy_build_value_init(&value, TINYPY_BUILD_VALUE_INTEGER);
+        value.integer_value = tinypy_integer_as_i64(object);
+        break;
+    case TINYPY_VALUE_LONG:
+        tinypy_build_value_init(&value, TINYPY_BUILD_VALUE_LONG);
+        value.long_digits = tinypy_long_base15_view(object, &value.long_sign, &value.long_digit_count);
+        break;
+    case TINYPY_VALUE_FLOAT:
+        tinypy_build_value_init(&value, TINYPY_BUILD_VALUE_FLOAT);
+        value.float_value = tinypy_float_as_double(object);
+        break;
+    case TINYPY_VALUE_STRING:
+        tinypy_build_value_init(&value, TINYPY_BUILD_VALUE_STRING);
+        value.data = tinypy_string_view(object, &value.data_size);
+        break;
+    case TINYPY_VALUE_UNICODE: {
+        size_t code_points;
+        tinypy_build_value_init(&value, TINYPY_BUILD_VALUE_UNICODE);
+        value.data = tinypy_unicode_utf8_view(object, &value.data_size, &code_points);
+        break;
+    }
+    default:
+        return TINYPY_FALSE;
+    }
+    *out_value = value;
+    return TINYPY_TRUE;
+}
+//////////////////////////////////////////////////////////////////////////
 void tinypy_build_profile_limits_init(tinypy_build_profile_limits_t *limits) {
     (void)memset(limits, 0, sizeof(*limits));
     limits->abi_version = TINYPY_COMPILER_ABI_VERSION;

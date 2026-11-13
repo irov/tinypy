@@ -270,6 +270,7 @@ class PublicApiNamingTests(unittest.TestCase):
             ),
             {
                 "tinypy_build_profile_find",
+                "tinypy_build_value_from_object",
                 "tinypy_class_is_subclass",
                 "tinypy_code_set_compile_options",
                 "tinypy_delete_item",

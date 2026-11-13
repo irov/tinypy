@@ -398,33 +398,8 @@ static tinypy_bool_t __tinypy_compiler_definition_value(tinypy_compile_ctx_t *ct
             return TINYPY_FALSE;
         }
     }
-    if (literal != NULL) {
-        switch (tinypy_typeof(literal)) {
-        case TINYPY_VALUE_INTEGER:
-            tinypy_build_value_init(value, TINYPY_BUILD_VALUE_INTEGER);
-            value->integer_value = tinypy_integer_as_i64(literal);
-            return TINYPY_TRUE;
-        case TINYPY_VALUE_LONG:
-            tinypy_build_value_init(value, TINYPY_BUILD_VALUE_LONG);
-            value->long_digits = tinypy_long_base15_view(literal, &value->long_sign, &value->long_digit_count);
-            return TINYPY_TRUE;
-        case TINYPY_VALUE_FLOAT:
-            tinypy_build_value_init(value, TINYPY_BUILD_VALUE_FLOAT);
-            value->float_value = tinypy_float_as_double(literal);
-            return TINYPY_TRUE;
-        case TINYPY_VALUE_STRING:
-            tinypy_build_value_init(value, TINYPY_BUILD_VALUE_STRING);
-            value->data = tinypy_string_view(literal, &value->data_size);
-            return TINYPY_TRUE;
-        case TINYPY_VALUE_UNICODE: {
-            size_t code_points;
-            tinypy_build_value_init(value, TINYPY_BUILD_VALUE_UNICODE);
-            value->data = tinypy_unicode_utf8_view(literal, &value->data_size, &code_points);
-            return TINYPY_TRUE;
-        }
-        default:
-            break;
-        }
+    if (tinypy_build_value_from_object(literal, value) != 0) {
+        return TINYPY_TRUE;
     }
     tinypy_internal_compiler_error(ctx, TINYPY_ERROR_PREPROCESSOR, "definition value must be a supported scalar literal", expression->lineno, expression->col_offset + 1, ctx->out_error);
     return TINYPY_FALSE;

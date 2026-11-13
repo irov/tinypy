@@ -174,6 +174,11 @@ typedef struct tinypy_build_profile_error_t {
 } tinypy_build_profile_error_t;
 
 void tinypy_build_value_init(tinypy_build_value_t *value, tinypy_build_value_type_e type);
+/* Borrow an exact builtin None/bool/int/long/float/str/unicode as a descriptor.
+ * No conversion or user code runs. Subclasses and all other types fail.
+ * Buffer/digit views remain valid while object is alive; create() copies them.
+ * NULL arguments fail, and out_value is unchanged on failure. */
+tinypy_bool_t tinypy_build_value_from_object(const tinypy_value_t *object, tinypy_build_value_t *out_value);
 void tinypy_build_profile_limits_init(tinypy_build_profile_limits_t *limits);
 
 /* A profile maps supplied names to typed constants, independent of any
