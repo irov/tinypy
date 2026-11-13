@@ -362,10 +362,6 @@ tinypy_bool_t tinypy_code_set_compile_options(tinypy_value_t *code, uint32_t fea
         tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "invalid code compile options", out_error);
         return TINYPY_FALSE;
     }
-    if (profile != NULL && tinypy_build_profile_optimize_level(profile) != optimize_level) {
-        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "code compile options and build profile optimize levels differ", out_error);
-        return TINYPY_FALSE;
-    }
     tinypy_bool_t result = tinypy_internal_code_attach_compile_options(code, feature_flags, optimize_level, profile, out_error);
     return result;
 }

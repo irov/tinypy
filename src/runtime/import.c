@@ -270,9 +270,6 @@ static tinypy_bool_t __tinypy_import_artifact_valid(const tinypy_module_artifact
         if (((artifact->compile_feature_flags & (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR) != 0U) != (artifact->build_profile != NULL)) {
             return TINYPY_FALSE;
         }
-        if (artifact->build_profile != NULL && tinypy_build_profile_optimize_level(artifact->build_profile) != artifact->compile_optimize_level) {
-            return TINYPY_FALSE;
-        }
     }
     return TINYPY_TRUE;
 }
@@ -296,12 +293,6 @@ static const tinypy_build_profile_t *__tinypy_import_build_profile(const tinypy_
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __tinypy_import_compile_optimize_level(const tinypy_module_artifact_t *artifact, int32_t default_level) {
-    const tinypy_build_profile_t *profile = __tinypy_import_build_profile(artifact);
-
-    if (profile != NULL) {
-        int32_t return_value_1 = (int32_t)tinypy_build_profile_optimize_level(profile);
-        return return_value_1;
-    }
     if (__tinypy_import_has_compile_environment(artifact) == 0) {
         return default_level;
     }

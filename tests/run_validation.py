@@ -316,6 +316,7 @@ class Validation:
             flags = '-fsanitize=address,undefined -fno-omit-frame-pointer' if sanitize else ''
             self.run(profile + '-configure', [self.arguments.cmake, '-S', ROOT, '-B', build,
                 '-DBUILD_TESTING=ON', '-DTINYPY_BUILD_CLI=ON', '-DCMAKE_BUILD_TYPE=' + build_type,
+                '-DTINYPY_REFERENCE_PYTHON=' + str(reference),
                 '-DTINYPY_ENABLE_CYCLE_DIAGNOSTICS=ON',
                 '-DTINYPY_ENABLE_LTO=' + ('ON' if lto else 'OFF'),
                 '-DCMAKE_C_FLAGS=' + flags, '-DCMAKE_C_FLAGS_DEBUG=-g'])

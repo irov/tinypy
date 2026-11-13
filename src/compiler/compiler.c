@@ -3,6 +3,9 @@
 
 #include "tinypy/code.h"
 #include "tinypy/eval.h"
+#include "tinypy/long.h"
+#include "tinypy/numeric.h"
+#include "tinypy/operator.h"
 #include "tinypy/preprocessor.h"
 #include "opcode.h"
 #include "tinypy/tuple.h"
@@ -360,6 +363,158 @@ tinypy_value_t *tinypy_internal_compiler_compile_source(tinypy_vm_t *vm, const v
 static tinypy_bool_t __tinypy_compiler_string_source(const tinypy_compile_options_t *options) {
     tinypy_bool_t string_source = (options->flags & (uint32_t)TINYPY_COMPILE_FLAG_STRING_SOURCE) != 0U || options->mode != TINYPY_COMPILE_EXEC ? TINYPY_TRUE : TINYPY_FALSE;
     return string_source;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __tinypy_compiler_definition_value(tinypy_compile_ctx_t *ctx, tinypy_ast_expression_t expression, tinypy_build_value_t *value, size_t depth) {
+    tinypy_value_t *literal = NULL;
+    if (depth > ctx->limits.max_nesting) {
+        tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "constant tuple nesting limit exceeded", expression->lineno, expression->col_offset + 1, ctx->out_error);
+        return TINYPY_FALSE;
+    }
+    if (expression->kind == TINYPY_AST_KIND_NAME) {
+        if (TINYPY_NAME_EQ(expression->v.Name.id, ctx->vm->internal_none_key) != 0) {
+            tinypy_build_value_init(value, TINYPY_BUILD_VALUE_NONE);
+            return TINYPY_TRUE;
+        }
+        if (TINYPY_NAME_EQ(expression->v.Name.id, ctx->vm->internal_true_key) != 0 || TINYPY_NAME_EQ(expression->v.Name.id, ctx->vm->internal_false_key) != 0) {
+            tinypy_build_value_init(value, TINYPY_BUILD_VALUE_BOOL);
+            value->integer_value = TINYPY_NAME_EQ(expression->v.Name.id, ctx->vm->internal_true_key) != 0;
+            return TINYPY_TRUE;
+        }
+    }
+    else if (expression->kind == TINYPY_AST_KIND_TUPLE) {
+        size_t count = (size_t)TINYPY_AST_SEQUENCE_LENGTH(expression->v.Tuple.elts);
+        tinypy_build_value_t *items = NULL;
+        if (count != 0U) {
+            items = (tinypy_build_value_t *)tinypy_internal_compiler_arena_allocate(ctx, count * sizeof(*items));
+            if (items == NULL) {
+                return TINYPY_FALSE;
+            }
+        }
+        tinypy_build_value_init(value, TINYPY_BUILD_VALUE_TUPLE);
+        value->items = items;
+        value->item_count = count;
+        for (size_t index = 0U; index < count; ++index) {
+            if (__tinypy_compiler_definition_value(ctx, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(expression->v.Tuple.elts, (int32_t)index), &items[index], depth + 1U) == 0) {
+                return TINYPY_FALSE;
+            }
+        }
+        return TINYPY_TRUE;
+    }
+    else if (expression->kind == TINYPY_AST_KIND_NUM) {
+        literal = expression->v.Num.n;
+    }
+    else if (expression->kind == TINYPY_AST_KIND_STR) {
+        literal = expression->v.Str.s;
+    }
+    else if (expression->kind == TINYPY_AST_KIND_UNARY_OP && expression->v.UnaryOp.operand->kind == TINYPY_AST_KIND_NUM && (expression->v.UnaryOp.op == TINYPY_AST_UNARY_ADD || expression->v.UnaryOp.op == TINYPY_AST_UNARY_SUBTRACT)) {
+        tinypy_value_t *operand = expression->v.UnaryOp.operand->v.Num.n;
+        tinypy_error_t *error = NULL;
+        literal = expression->v.UnaryOp.op == TINYPY_AST_UNARY_ADD ? tinypy_positive(operand, &error) : tinypy_negative(operand, &error);
+        if (literal == NULL) {
+            tinypy_internal_compiler_operation_error(ctx, TINYPY_ERROR_PREPROCESSOR, error, "invalid numeric constant", expression->lineno, expression->col_offset + 1);
+            return TINYPY_FALSE;
+        }
+        if (tinypy_internal_compiler_arena_add_value(ctx, literal) != 0) {
+            TINYPY_DECREF(literal);
+            tinypy_internal_compiler_memory_error(ctx);
+            return TINYPY_FALSE;
+        }
+    }
+    if (literal != NULL) {
+        switch (tinypy_typeof(literal)) {
+        case TINYPY_VALUE_INTEGER:
+            tinypy_build_value_init(value, TINYPY_BUILD_VALUE_INTEGER);
+            value->integer_value = tinypy_integer_as_i64(literal);
+            return TINYPY_TRUE;
+        case TINYPY_VALUE_LONG:
+            tinypy_build_value_init(value, TINYPY_BUILD_VALUE_LONG);
+            value->long_digits = tinypy_long_base15_view(literal, &value->long_sign, &value->long_digit_count);
+            return TINYPY_TRUE;
+        case TINYPY_VALUE_FLOAT:
+            tinypy_build_value_init(value, TINYPY_BUILD_VALUE_FLOAT);
+            value->float_value = tinypy_float_as_double(literal);
+            return TINYPY_TRUE;
+        case TINYPY_VALUE_STRING:
+            tinypy_build_value_init(value, TINYPY_BUILD_VALUE_STRING);
+            value->data = tinypy_string_view(literal, &value->data_size);
+            return TINYPY_TRUE;
+        case TINYPY_VALUE_UNICODE: {
+            size_t code_points;
+            tinypy_build_value_init(value, TINYPY_BUILD_VALUE_UNICODE);
+            value->data = tinypy_unicode_utf8_view(literal, &value->data_size, &code_points);
+            return TINYPY_TRUE;
+        }
+        default:
+            break;
+        }
+    }
+    tinypy_internal_compiler_error(ctx, TINYPY_ERROR_PREPROCESSOR, "definition value must be a supported Python literal", expression->lineno, expression->col_offset + 1, ctx->out_error);
+    return TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+tinypy_build_profile_result_e tinypy_internal_compiler_definition_parse(tinypy_vm_t *vm, const tinypy_allocator_t *allocator, const char *name, size_t name_size, const char *source, const tinypy_build_profile_limits_t *limits, tinypy_build_profile_t **out_profile, tinypy_build_profile_error_t *out_error) {
+    tinypy_compile_ctx_t ctx;
+    tinypy_build_constant_t constant;
+    tinypy_error_t *error = NULL;
+    tinypy_bool_t parsed = TINYPY_FALSE;
+    tinypy_build_profile_result_e result = TINYPY_BUILD_PROFILE_OK;
+
+    *out_profile = NULL;
+    /* Definitions are literals, not encoded source files: whitespace before
+       the value is ignored, and a leading comment/BOM is rejected before
+       source preparation can look up codecs. */
+    while (*source == ' ' || *source == '\t' || *source == '\f' || *source == '\r' || *source == '\n') {
+        source += 1;
+    }
+    if (*source == '#' || (uint8_t)*source == UINT8_C(0xef)) {
+        result = tinypy_internal_build_profile_fail(out_error, TINYPY_BUILD_PROFILE_INVALID_DEFINITION, 0U, "definition value must start with a Python literal");
+        return result;
+    }
+    tinypy_internal_exception_clear_raised(vm);
+    (void)memset(&ctx, 0, sizeof(ctx));
+    ctx.vm = vm;
+    ctx.logical_filename = "<define>";
+    ctx.filename_size = 8U;
+    ctx.source_is_unicode = TINYPY_TRUE;
+    ctx.literal_definition = TINYPY_TRUE;
+    ctx.out_error = &error;
+    tinypy_compile_options_init(&ctx.options, TINYPY_COMPILE_EVAL);
+    ctx.options.dont_inherit = TINYPY_TRUE;
+    tinypy_compile_limits_init(&ctx.limits);
+    ctx.limits.max_nesting = limits->max_depth;
+    ctx.limits.max_arena_bytes = limits->max_allocated_bytes;
+    (void)memset(&constant, 0, sizeof(constant));
+    constant.abi_version = TINYPY_COMPILER_ABI_VERSION;
+    constant.struct_size = (uint32_t)sizeof(constant);
+    constant.name = name;
+    constant.name_size = name_size;
+    vm->compile_depth += 1U;
+    if (tinypy_internal_compiler_source_prepare(&ctx, source, strlen(source), &error) != 0) {
+        tinypy_compiler_flags_t flags;
+        tinypy_future_features_t *future;
+        tinypy_ast_module_t module = __tinypy_compiler_front_stages(&ctx, &flags, &future, &error);
+        parsed = module != NULL && __tinypy_compiler_definition_value(&ctx, module->v.Expression.body, &constant.value, 0U) != 0;
+    }
+    /* The value views the arena, so the profile copies it first. */
+    if (parsed != 0) {
+        result = tinypy_build_profile_create(allocator, &constant, 1U, limits, out_profile, out_error);
+    }
+    vm->compile_depth -= 1U;
+    tinypy_internal_compiler_arena_destroy(&ctx);
+    if (parsed != 0) {
+        return result;
+    }
+    tinypy_error_kind_e kind = error != NULL ? tinypy_error_kind(error) : TINYPY_ERROR_MEMORY;
+    if (error != NULL) {
+        tinypy_error_release(error);
+    }
+    if (kind == TINYPY_ERROR_MEMORY || kind == TINYPY_ERROR_COMPILER_LIMIT) {
+        result = tinypy_internal_build_profile_fail(out_error, TINYPY_BUILD_PROFILE_LIMIT_EXCEEDED, 0U, "definition value exceeds compiler limits");
+        return result;
+    }
+    result = tinypy_internal_build_profile_fail(out_error, TINYPY_BUILD_PROFILE_INVALID_DEFINITION, 0U, "definition value must be a supported Python 2.7 literal");
+    return result;
 }
 //////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_compile_source(tinypy_vm_t *vm, const void *source, size_t source_size, const char *logical_filename, size_t filename_size, const tinypy_compile_options_t *options, tinypy_error_t **out_error) {

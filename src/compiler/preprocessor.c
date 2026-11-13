@@ -46,26 +46,14 @@ static tinypy_bool_t __tinypy_preprocessor_identifier_identity_literal(tinypy_as
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_preprocessor_identifier_reserved(tinypy_ast_identifier_t identifier) {
-    size_t size;
-    const char *data;
-
+static tinypy_bool_t __tinypy_preprocessor_identifier_constant(tinypy_compile_ctx_t *ctx, tinypy_ast_identifier_t identifier, const tinypy_build_value_t **out_value) {
     if (identifier == NULL) {
         return TINYPY_FALSE;
     }
-    data = (const char *)tinypy_string_view(identifier, &size);
-    tinypy_bool_t return_value_1 = tinypy_preprocessor_name_is_reserved(data, size) != 0 ? TINYPY_TRUE : TINYPY_FALSE;
-    return return_value_1;
-}
-//////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_preprocessor_identifier_debug_flag(tinypy_compile_ctx_t *ctx, tinypy_ast_identifier_t identifier) {
-    const tinypy_build_value_t *value;
     size_t size;
     const char *name = (const char *)tinypy_string_view(identifier, &size);
-    if (tinypy_build_profile_find(ctx->options.build_profile, name, size, &value) == 0) {
-        return TINYPY_FALSE;
-    }
-    return value->type == (uint32_t)TINYPY_BUILD_VALUE_DEBUG_FLAG;
+    tinypy_bool_t found = tinypy_build_profile_find(ctx->options.build_profile, name, size, out_value);
+    return found;
 }
 //////////////////////////////////////////////////////////////////////////
 static void __tinypy_preprocessor_identifier_error(tinypy_compile_ctx_t *ctx, tinypy_ast_identifier_t identifier, const char *suffix, int32_t line, int32_t column) {
@@ -109,10 +97,8 @@ static tinypy_bool_t __tinypy_preprocessor_bytes_add(tinypy_compile_ctx_t *ctx, 
 }
 //////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_preprocessor_identifier_validate_binding(tinypy_compile_ctx_t *ctx, tinypy_ast_identifier_t identifier, int32_t line, int32_t column) {
-    if (__tinypy_preprocessor_identifier_reserved(identifier) == 0) {
-        return TINYPY_TRUE;
-    }
-    if (__tinypy_preprocessor_identifier_debug_flag(ctx, identifier) != 0) {
+    const tinypy_build_value_t *value;
+    if (__tinypy_preprocessor_identifier_constant(ctx, identifier, &value) == 0) {
         return TINYPY_TRUE;
     }
     __tinypy_preprocessor_identifier_error(ctx, identifier, " cannot be rebound", line, column);
@@ -212,17 +198,6 @@ static tinypy_bool_t __tinypy_preprocessor_expression_validate(tinypy_compile_ct
             tinypy_bool_t return_value_1 = __tinypy_preprocessor_identifier_validate_binding(ctx, expression->v.Name.id, expression->lineno, expression->col_offset);
             return return_value_1;
         }
-        if (__tinypy_preprocessor_identifier_reserved(expression->v.Name.id) != 0) {
-            const tinypy_build_value_t *value;
-            size_t size;
-            const char *name = (const char *)tinypy_string_view(expression->v.Name.id, &size);
-
-            if (tinypy_build_profile_find(ctx->options.build_profile, name, size, &value) == 0) {
-                (void)value;
-                __tinypy_preprocessor_identifier_error(ctx, expression->v.Name.id, " is not defined by the build profile", expression->lineno, expression->col_offset);
-                return TINYPY_FALSE;
-            }
-        }
         return TINYPY_TRUE;
     case TINYPY_AST_KIND_NUM:
     case TINYPY_AST_KIND_STR:
@@ -312,7 +287,8 @@ static tinypy_bool_t __tinypy_preprocessor_alias_binding_validate(tinypy_compile
     while (dot < size && data[dot] != '.') {
         dot += 1U;
     }
-    if (tinypy_preprocessor_name_is_reserved(data, dot) == 0) {
+    const tinypy_build_value_t *value;
+    if (tinypy_build_profile_find(ctx->options.build_profile, data, dot, &value) == 0) {
         return TINYPY_TRUE;
     }
     __tinypy_preprocessor_identifier_error(ctx, alias->name, " cannot be rebound by import", line, column);
@@ -595,10 +571,6 @@ static tinypy_ast_expression_t __tinypy_preprocessor_expression_transform(tinypy
     }
     switch (expression->kind) {
     case TINYPY_AST_KIND_NAME:
-        if (expression->v.Name.ctx == TINYPY_AST_CONTEXT_LOAD && __tinypy_preprocessor_identifier_debug_flag(ctx, expression->v.Name.id) != 0) {
-            ctx->preprocessor_debug_flag_seen = TINYPY_TRUE;
-            break;
-        }
         if (expression->v.Name.ctx == TINYPY_AST_CONTEXT_LOAD && strcmp(TINYPY_COMPILER_STRING_AS_STRING(expression->v.Name.id), "__debug__") == 0) {
             tinypy_build_value_t value;
             tinypy_build_value_init(&value, TINYPY_BUILD_VALUE_BOOL);
@@ -606,15 +578,12 @@ static tinypy_ast_expression_t __tinypy_preprocessor_expression_transform(tinypy
             tinypy_ast_expression_t replacement = __tinypy_preprocessor_constant_expression(ctx, expression, &value);
             return replacement;
         }
-        if (expression->v.Name.ctx == TINYPY_AST_CONTEXT_LOAD && __tinypy_preprocessor_identifier_reserved(expression->v.Name.id) != 0) {
-            const tinypy_build_value_t *value = NULL;
-            size_t size;
-            const char *name = (const char *)tinypy_string_view(expression->v.Name.id, &size);
-            tinypy_bool_t found = tinypy_build_profile_find(ctx->options.build_profile, name, size, &value);
-
-            (void)found;
-            tinypy_ast_expression_t return_value_1 = __tinypy_preprocessor_constant_expression(ctx, expression, value);
-            return return_value_1;
+        if (expression->v.Name.ctx == TINYPY_AST_CONTEXT_LOAD) {
+            const tinypy_build_value_t *value;
+            if (__tinypy_preprocessor_identifier_constant(ctx, expression->v.Name.id, &value) != 0) {
+                tinypy_ast_expression_t replacement = __tinypy_preprocessor_constant_expression(ctx, expression, value);
+                return replacement;
+            }
         }
         break;
     case TINYPY_AST_KIND_NUM:
@@ -1130,6 +1099,57 @@ static int32_t __tinypy_preprocessor_condition_truth(tinypy_compile_ctx_t *ctx, 
     return truth;
 }
 //////////////////////////////////////////////////////////////////////////
+/* Skip only a decidable neutral prefix, and cut off operands after a
+   decisive constant. An unknown prefix still runs, including its truth
+   tests. Keep unknown operands intact: nested boolean expressions and not
+   can test a user object's truth more than once in Python 2. */
+static int32_t __tinypy_preprocessor_condition_transform(tinypy_compile_ctx_t *ctx, tinypy_ast_expression_t *test, uint32_t future_flags, tinypy_bool_t *out_discardable) {
+    tinypy_ast_expression_t expression = *test;
+
+    *out_discardable = TINYPY_FALSE;
+    if (expression->kind != TINYPY_AST_KIND_BOOL_OP) {
+        int32_t truth = __tinypy_preprocessor_condition_truth(ctx, expression, future_flags);
+        *out_discardable = truth >= 0;
+        return truth;
+    }
+    if (__tinypy_preprocessor_tick(ctx, expression->lineno, expression->col_offset) == 0) {
+        return -1;
+    }
+    tinypy_ast_sequence_t *values = expression->v.BoolOp.values;
+    int32_t short_circuit = expression->v.BoolOp.op == TINYPY_AST_BOOLEAN_OR;
+    int32_t count = 0;
+    int32_t result = short_circuit == 0;
+    tinypy_ast_expression_t operand = NULL;
+    for (int32_t index = 0; index < TINYPY_AST_SEQUENCE_LENGTH(values); ++index) {
+        operand = (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(values, index);
+        int32_t truth = __tinypy_preprocessor_condition_truth(ctx, operand, future_flags);
+        if (ctx->failed != 0) {
+            return -1;
+        }
+        if (count == 0 && truth >= 0 && truth != short_circuit) {
+            continue;
+        }
+        TINYPY_AST_SEQUENCE_SET(values, count, operand);
+        count += 1;
+        if (truth == short_circuit) {
+            result = truth;
+            break;
+        }
+        result = -1;
+    }
+    if (count == 0) {
+        *test = operand;
+        *out_discardable = TINYPY_TRUE;
+        return result;
+    }
+    values->size = count;
+    if (count == 1) {
+        *test = (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(values, 0);
+        *out_discardable = result >= 0;
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_preprocessor_builder_append(tinypy_compile_ctx_t *ctx, tinypy_preprocessor_sequence_builder_t *builder, tinypy_ast_statement_t statement) {
     tinypy_preprocessor_sequence_node_t *node = (tinypy_preprocessor_sequence_node_t *)tinypy_internal_compiler_arena_allocate(ctx, sizeof(*node));
 
@@ -1199,28 +1219,33 @@ static tinypy_bool_t __tinypy_preprocessor_statement_append_transformed(tinypy_c
         statement->v.While.orelse = __tinypy_preprocessor_optional_sequence_transform(ctx, statement->v.While.orelse);
         break;
     case TINYPY_AST_KIND_IF: {
-        ctx->preprocessor_debug_flag_seen = TINYPY_FALSE;
         statement->v.If.test = __tinypy_preprocessor_expression_transform(ctx, statement->v.If.test);
         if (ctx->failed != 0) {
             return TINYPY_FALSE;
         }
-        if (ctx->options.optimize_level != 0 && ctx->preprocessor_debug_flag_seen != 0) {
-            if (__tinypy_preprocessor_sequence_append_transformed(ctx, builder, statement->v.If.orelse, future_flags) == 0) {
-                return TINYPY_FALSE;
-            }
-            return TINYPY_TRUE;
-        }
-        int32_t truth = __tinypy_preprocessor_condition_truth(ctx, statement->v.If.test, future_flags);
+        tinypy_bool_t discardable;
+        int32_t truth = __tinypy_preprocessor_condition_transform(ctx, &statement->v.If.test, future_flags, &discardable);
 
         if (ctx->failed != 0) {
             return TINYPY_FALSE;
         }
-        if (truth >= 0) {
+        if (discardable != 0) {
             tinypy_bool_t return_value_1 = __tinypy_preprocessor_sequence_append_transformed(ctx, builder, truth != 0 ? statement->v.If.body : statement->v.If.orelse, future_flags);
             return return_value_1;
         }
-        statement->v.If.body = __tinypy_preprocessor_sequence_transform(ctx, statement->v.If.body);
-        statement->v.If.orelse = __tinypy_preprocessor_optional_sequence_transform(ctx, statement->v.If.orelse);
+        if (truth == 0) {
+            tinypy_ast_statement_t first = (tinypy_ast_statement_t)TINYPY_AST_SEQUENCE_GET(statement->v.If.body, 0);
+            tinypy_ast_statement_t pass_statement = __tinypy_ast_pass(first->lineno, first->col_offset, ctx);
+            if (pass_statement == NULL) {
+                return TINYPY_FALSE;
+            }
+            TINYPY_AST_SEQUENCE_SET(statement->v.If.body, 0, pass_statement);
+            statement->v.If.body->size = 1;
+        }
+        else {
+            statement->v.If.body = __tinypy_preprocessor_sequence_transform(ctx, statement->v.If.body);
+        }
+        statement->v.If.orelse = truth == 1 ? NULL : __tinypy_preprocessor_optional_sequence_transform(ctx, statement->v.If.orelse);
         break;
     }
     case TINYPY_AST_KIND_WITH:

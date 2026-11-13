@@ -1179,123 +1179,155 @@ together on success or error.
 
 ## 10. Build profiles
 
-An immutable build profile stores typed constants and a deterministic
-digest. Supported values:
+An immutable build profile maps explicit names to typed compile-time constants.
+Supported values are `None`, bool, integer, long, float, byte string, Unicode,
+and immutable tuples of supported values. There is no implicit profile entry.
+A profile does not depend on an optimize level: one profile serves compilation
+at optimize `0`, `1`, and `2`.
 
-- `None`, bool, integer, long, and float;
-- byte string and Unicode;
-- an immutable tuple of supported values.
+Names can be any ASCII Python identifier except keywords, `None`, `True`,
+`False`, and `__debug__`. No naming pattern is reserved: the host chooses the
+names, and every source compiled with the profile shares them. This is
+intentional and has these consequences:
 
-Reserved build-constant format:
+- Matching is lexical and precedes scope analysis and name mangling. Reads in
+  nested functions, class bodies, and lambdas match, and so does a
+  class-private spelling such as `__NAME` inside a class.
+- Rebinding, deleting, importing into, declaring `global`, or declaring a
+  parameter with a supplied name is a compile error in every scope, including
+  unreachable source and dynamic code that inherits the profile. A profile
+  entry `self` rejects every method, and an entry `DEBUG` rejects a class
+  attribute `DEBUG = True`; choose names that compiled sources do not bind.
+- A supplied name shadows a builtin of the same spelling: with `len=7`, the
+  call `len(items)` calls the integer `7`.
+- An unregistered name remains a runtime name without a diagnostic. This
+  includes a misspelled reference to a supplied name and spellings such as
+  `__NAME__` and `__NDEBUG__`.
+- Attributes such as `object._DEVELOPMENT` and string contents never match.
+  Text passed to `eval`, `exec`, or `compile` undergoes substitution only when
+  that dynamic compilation inherits the profile, and
+  `globals()['_DEVELOPMENT']` always reads the runtime namespace.
 
-```text
-^__[A-Z][A-Z0-9_]*__$
+With `TINYPY_COMPILE_FEATURE_PREPROCESSOR` enabled, each bare-name read of a
+supplied name is replaced by its typed literal AST before symbol analysis.
+`False` stays the bool singleton `False`, `True` stays `True`, and integer
+zero remains an integer. This applies inside and outside conditions. Container
+keys and indices in assignment, augmented assignment, `for`, `with`, `except`,
+and comprehension targets still undergo substitution; the container itself
+remains mutable. Without preprocessing the profile has no effect on source
+compilation.
+
+The profile deeply copies all inputs through the host allocator. Allocation
+refusal ends `tinypy_build_profile_create` with
+`TINYPY_BUILD_PROFILE_LIMIT_EXCEEDED`, releasing allocated storage. Input order
+affects neither canonical ordering nor the digest, which covers the
+preprocessor ABI and the constants. An empty profile contains zero constants.
+Unicode values are shortest-form UTF-8 and may contain surrogate code points,
+as Python 2.7 Unicode literals may.
+
+The pure evaluator supports literals and literal containers, boolean, unary,
+arithmetic, and bitwise operations, comparisons, membership, and identity with
+`None`/bool. A decidable `if` is replaced by its selected suite. Reachable
+`elif` and `else` alternatives remain; an always-true condition retains its
+body and removes later alternatives. Bindings and yields in removed suites
+contribute no symbols or generator flag to their enclosing function.
+
+For an explicit `_DEVELOPMENT=False` definition:
+
+```python
+if _DEVELOPMENT: debug_code()          # unreachable body disappears
+if _DEVELOPMENT or condition: work()   # becomes if condition: work()
+if not _DEVELOPMENT: release_code()    # retains release_code() unconditionally
+if _DEVELOPMENT: debug_code()
+else: release_code()                  # retains release_code()
+value = _DEVELOPMENT                  # stores boolean False
 ```
 
-The profile fully copies input through the host allocator; an allocation
-rejected by the allocator ends `tinypy_build_profile_create` with
-`TINYPY_BUILD_PROFILE_LIMIT_EXCEEDED`, releasing all allocated storage.
-Input order affects neither canonical ordering nor the digest. The optimize
-level is part of the profile.
+`Development is _DEVELOPMENT or Development is None` becomes
+`Development is False or Development is None`. The manager load remains
+reachable for `Development=False` and `Development=None`, and is excluded
+for `True` and integer zero.
 
-With `TINYPY_COMPILE_FEATURE_PREPROCESSOR` enabled, every bare-name read
-matching the reserved format is replaced by literal AST before the symbol
-table. Attributes such as `object.__STATE__` are not build constants.
-A missing constant or any attempt to bind a reserved name is a compile
-error.
+A condition disappears only when its evaluation is also dispensable.
+Evaluation order, short circuiting, callbacks, truth tests and exceptions
+remain observable. In `if probe() and _DEVELOPMENT: debug_code()`, the debug
+body disappears but a condition with a `pass` body remains: `probe()` and its
+necessary truth test still execute. A decidable neutral prefix may disappear,
+and operands following a decisive constant are unreachable. Unknown nested
+expressions remain intact, including repeated truth tests across `not` in
+Python 2. A pure expression that raises (`1 // 0`, for example) remains at
+runtime so its exception occurs only when reached; only allocation failure
+or compiler limits fail compilation.
 
-`__NDEBUG__` is always created by the profile itself: optimize `0` produces
-`False`, while optimize `1` and `2` produce `True`. This constant cannot be
-provided explicitly.
+An emptied suite keeps a `pass` at its first statement's position; an emptied
+`else` disappears entirely. Evaluator integer results of `**`, `<<`, and `*`
+cannot exceed 65536 bits. Strings and sequences cannot exceed
+`max_preprocessor_bytes`; exceeding a limit is a compile error.
 
-The pure evaluator supports literals and literal containers, boolean,
-unary, arithmetic, and bitwise operations, comparisons, membership, and
-identity with `None`/bool. A fully decidable `if` is replaced by the chosen
-suite before symbol analysis. Calls, attributes, subscripts, lambdas, and
-comprehensions keep a condition at runtime even though build constants
-inside it have already been replaced. A condition whose evaluation raises
-an exception (`1 // 0` or an unhashable dict key) also remains at runtime:
-the exception is raised when and if the condition executes; only
-`MemoryError` causes a compile error.
+The immutable builtin `__debug__` retains Python 2.7 semantics and is the
+only constant that depends on the optimize level. The preprocessor takes it
+from the compile options, not from the profile: optimize `0` produces `True`,
+optimize `1` and `2` produce `False`. It cannot be supplied by a profile.
+There is no debug-flag value type and no synthesized `__NDEBUG__` constant.
+Preprocessor ABI `4` replaces ABI `3`'s flag-name removal with explicit typed
+constants and removes the optimize level from the profile.
 
-Build constants are also substituted inside assignment targets: augmented
-assignment, `for`, `with`, `except`, and comprehension targets. A suite
-completely removed by preprocessing is replaced with `pass` at its first
-statement's position, and an emptied `else` disappears entirely, keeping
-the line table monotonic. Evaluator intermediate results are bounded before
-computation: integer results of `**`, `<<`, and `*` cannot exceed 65536
-bits, and strings and sequences cannot exceed `max_preprocessor_bytes`;
-exceeding a limit is a compile error. Without a build profile, the
-preprocessor defines no constants.
-
-The preprocessor also replaces the immutable builtin `__debug__` with a bool
-literal derived from the compile optimize level. Conditions such as
-`if __debug__ is True and runtime_flag is True:` lose their body at optimize
-`1` and `2`; an ordinary `else` is retained. Boolean conditions can fold a
-decisive constant prefix, preserving short-circuit order. For example,
-`__debug__ and callback()` skips the callback in optimized code, whereas
-`callback() and __debug__` still calls it.
-
-Hosts can supply `TINYPY_BUILD_VALUE_DEBUG_FLAG` entries in the same profile
-to mark runtime boolean names such as `_DEVELOPMENT`. These entries have no
-value fields and cannot occur inside tuples. Unlike literal build constants,
-their names accept ASCII Python identifiers, excluding keywords, `None`,
-`True`, `False`, `__debug__`, and the synthesized `__NDEBUG__`.
-
-With `TINYPY_COMPILE_FEATURE_PREPROCESSOR` enabled:
-
-- Optimize `0` preserves reads and bindings of these flags at runtime. A flag
-  can be either `True` or `False` and can change between executions.
-- Optimize `1` and `2` remove the test and body of an `if` when its test
-  contains a bare-name read of a registered flag. Its `elif` and `else`
-  alternatives are retained and preprocessed normally. Any calls in the
-  removed test are also dropped. This applies to negation and `or` as well;
-  it is a lexical removal rule, rather than substitution with `False`.
-- Reads outside `if` tests remain runtime reads at every optimize level.
-  Attributes such as `object._DEVELOPMENT` and strings do not match. Matching
-  precedes name mangling and symbol analysis, so local names with the same
-  spelling also match. Removed bindings and yields contribute no symbols or
-  generator flag to their enclosing function.
-
-An `elif` is a nested `if` in the AST: if only its test uses a debug flag,
-that `elif`'s test and body disappear while earlier clauses and following
-alternatives remain. The flag list is copied into the immutable compile
-environment and included in the profile digest, so dynamic `compile`, `eval`,
-and `exec` inherit the same rules. With preprocessing disabled, the markers
-have no effect on source compilation. Preprocessor ABI `3` retains the
-alternatives that ABI `2` removed.
-
-The host can attach that environment to marshal-loaded code and all nested
-code constants with `tinypy_code_set_compile_options`. The function copies
-the profile for subsequent dynamic compilation; it leaves existing bytecode
-unchanged. Invalid settings or allocation failure preserve the previous
-environment. Static debug blocks in serialized code must already have been
-removed when that code was compiled.
-
-For example, an embedding host can register `_DEVELOPMENT` when constructing
-its profile (and register additional flags with more entries in the array):
+For example, an embedding host can supply `_DEVELOPMENT` for every optimize
+level:
 
 ```c
-tinypy_build_constant_t flags[1] = {0};
-flags[0].abi_version = TINYPY_COMPILER_ABI_VERSION;
-flags[0].struct_size = (uint32_t)sizeof(flags[0]);
-flags[0].name = "_DEVELOPMENT";
-flags[0].name_size = sizeof("_DEVELOPMENT") - 1U;
-tinypy_build_value_init(&flags[0].value, TINYPY_BUILD_VALUE_DEBUG_FLAG);
+tinypy_build_constant_t constant = {0};
+constant.abi_version = TINYPY_COMPILER_ABI_VERSION;
+constant.struct_size = (uint32_t)sizeof(constant);
+constant.name = "_DEVELOPMENT";
+constant.name_size = sizeof("_DEVELOPMENT") - 1U;
+tinypy_build_value_init(&constant.value, TINYPY_BUILD_VALUE_BOOL);
+constant.value.integer_value = 0;
 
 tinypy_build_profile_t *profile = NULL;
-/* Check the result before using profile. */
+/* Check status before using profile. */
 tinypy_build_profile_result_e status = tinypy_build_profile_create(
-    allocator, optimize_level, flags, 1U, NULL, &profile, NULL);
-
-tinypy_compile_options_t options;
-tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
-options.optimize_level = optimize_level;
-options.feature_flags |= TINYPY_COMPILE_FEATURE_PREPROCESSOR;
-options.build_profile = profile;
-/* Pass options to tinypy_compile_source, then destroy the host profile
-   when it is no longer needed; compiled code owns its own copy. */
+    allocator, &constant, 1U, NULL, &profile, NULL);
 ```
+
+`tinypy_build_profile_parse` creates the same profile from `NAME=literal`
+strings, with the allocator, limits, result codes, and error report of
+`tinypy_build_profile_create`; `constant_index` names the failed definition.
+The compiler of the given VM parses each value as a Python 2.7 literal without
+executing code, in an arena that it releases before the next definition. The
+VM is needed only during the call, and the profile outlives it. Literal decoding
+uses no VM codecs or error handlers: invalid Unicode escapes/UTF-8 and
+concatenation of non-ASCII byte literals with Unicode fail as invalid definitions.
+Ordinary source compilation keeps Python's codec and error-handler behavior.
+Values can be `None`, `True`, `False`, signed integers/longs/floats, quoted byte
+or Unicode strings, and nested tuples; whitespace before a value is ignored.
+A definition without `=`, or whose value is a call, lookup, arithmetic, or another
+non-literal expression, fails with `TINYPY_BUILD_PROFILE_INVALID_DEFINITION`.
+Duplicate names fail with `TINYPY_BUILD_PROFILE_DUPLICATE_NAME`.
+
+The `tinypy_compile` console compiler accepts repeated `-DNAME=literal` or
+`-D NAME=literal` options in addition to its five positional arguments:
+
+```sh
+tinypy_compile -D_DEVELOPMENT=False -DAPI_VERSION=3 \
+    "-DCHANNEL='stable'" script.py script.marshal script.py exec 1
+```
+
+Definitions enable the preprocessing stage. Besides substitution, that stage
+replaces `__debug__` and resolves decidable `if` statements, including in
+source that reads no definition. With no `-D` options this differential
+compiler retains ordinary Python compilation. Literal quotes must survive the
+shell, as in the `CHANNEL` example. Invalid arguments/definitions fail before
+writing bytecode and leave an existing output file intact.
+
+The compiled code owns a copy of its profile. Dynamic `compile`, `eval`, and
+`exec` inherit the same definitions and optimize level, including in nested
+functions and with `dont_inherit=True` (which only controls future flags).
+The host can attach this environment to marshal-loaded code and all nested
+code constants with `tinypy_code_set_compile_options`. It copies the profile
+for subsequent dynamic compilation and leaves existing bytecode unchanged.
+Invalid settings or allocation failure preserve the old environment. Static
+substitution must already have happened when serialized code was compiled.
 
 ## 11. Metatemplates
 

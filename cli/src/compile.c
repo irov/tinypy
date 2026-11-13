@@ -111,20 +111,54 @@ int32_t tinypy_cli_compile_run(int32_t argc, char **argv) {
     size_t filename_size;
     int32_t optimize;
     int32_t result = EXIT_FAILURE;
+    const char *positional[5];
+    size_t positional_count = 0U;
+    size_t definition_count = 0U;
+    tinypy_build_profile_t *profile = NULL;
+    const char **definitions = (const char **)malloc((size_t)argc * sizeof(*definitions));
 
-    if (argc != 6 || __tinypy_cli_mode(argv[4], &mode) == 0) {
+    if (definitions == NULL) {
         return EXIT_FAILURE;
     }
-
-    optimize = (int32_t)(argv[5][0] - '0');
-
-    if (argv[5][1] != '\0' || optimize < 0 || optimize > 2) {
-        return EXIT_FAILURE;
+    tinypy_bool_t end_options = TINYPY_FALSE;
+    for (int32_t index = 1; index < argc; ++index) {
+        const char *argument = argv[index];
+        if (end_options == 0 && strcmp(argument, "--") == 0) {
+            end_options = TINYPY_TRUE;
+        }
+        else if (end_options == 0 && strncmp(argument, "-D", 2U) == 0) {
+            if (argument[2] == '\0') {
+                index += 1;
+                if (index == argc) {
+                    goto invalid_arguments;
+                }
+                definitions[definition_count++] = argv[index];
+            }
+            else {
+                definitions[definition_count++] = argument + 2;
+            }
+        }
+        else {
+            if (positional_count == 5U) {
+                goto invalid_arguments;
+            }
+            positional[positional_count++] = argument;
+        }
+    }
+    if (positional_count != 5U || __tinypy_cli_mode(positional[3], &mode) == 0) {
+        goto invalid_arguments;
     }
 
-    source = __tinypy_cli_read(argv[1], &source_size);
+    optimize = (int32_t)(positional[4][0] - '0');
+
+    if (positional[4][0] == '\0' || positional[4][1] != '\0' || optimize < 0 || optimize > 2) {
+        goto invalid_arguments;
+    }
+
+    source = __tinypy_cli_read(positional[0], &source_size);
 
     if (source == NULL) {
+        free(definitions);
         return EXIT_FAILURE;
     }
 
@@ -142,13 +176,32 @@ int32_t tinypy_cli_compile_run(int32_t argc, char **argv) {
     config.optimize_level = optimize;
 
     vm = tinypy_vm_create(&config);
+    if (vm == NULL) {
+        free(definitions);
+        free(source);
+        return EXIT_FAILURE;
+    }
 
     tinypy_compile_options_init(&options, mode);
     /* The reference compiles the bytes of the file with compile(). */
     options.flags = (uint32_t)TINYPY_COMPILE_FLAG_STRING_SOURCE;
     options.optimize_level = optimize;
-    filename_size = strlen(argv[3]);
-    code = tinypy_compile_source(vm, source, source_size, argv[3], filename_size, &options, &error);
+    if (definition_count != 0U) {
+        tinypy_build_profile_error_t profile_error;
+        if (tinypy_build_profile_parse(vm, &allocator, definitions, definition_count, NULL, &profile, &profile_error) != TINYPY_BUILD_PROFILE_OK) {
+            if (profile_error.constant_index < definition_count) {
+                (void)fprintf(stderr, "invalid -D definition '%s': %.*s\n", definitions[profile_error.constant_index], (int32_t)profile_error.message_size, profile_error.message);
+            }
+            else {
+                (void)fprintf(stderr, "invalid -D definitions: %.*s\n", (int32_t)profile_error.message_size, profile_error.message);
+            }
+            goto cleanup;
+        }
+        options.feature_flags = (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR;
+        options.build_profile = profile;
+    }
+    filename_size = strlen(positional[2]);
+    code = tinypy_compile_source(vm, source, source_size, positional[2], filename_size, &options, &error);
 
     if (code == NULL) {
         if (error != NULL) {
@@ -157,7 +210,7 @@ int32_t tinypy_cli_compile_run(int32_t argc, char **argv) {
             int32_t error_line_number = tinypy_error_line_number(error);
             int32_t error_column_offset = tinypy_error_column_offset(error);
 
-            (void)fprintf(stderr, "%s:%d:%d: %.*s\n", argv[3], error_line_number, error_column_offset, (int32_t)message_size, message);
+            (void)fprintf(stderr, "%s:%d:%d: %.*s\n", positional[2], error_line_number, error_column_offset, (int32_t)message_size, message);
         }
 
         goto cleanup;
@@ -169,7 +222,7 @@ int32_t tinypy_cli_compile_run(int32_t argc, char **argv) {
 
     marshal = (uint8_t *)malloc(marshal_size == 0U ? 1U : marshal_size);
 
-    if (tinypy_marshal_dump_code_v2(code, marshal, marshal_size, &marshal_size, NULL, NULL) == TINYPY_MARSHAL_OK && __tinypy_cli_write(argv[2], marshal, marshal_size) != 0) {
+    if (tinypy_marshal_dump_code_v2(code, marshal, marshal_size, &marshal_size, NULL, NULL) == TINYPY_MARSHAL_OK && __tinypy_cli_write(positional[1], marshal, marshal_size) != 0) {
         result = EXIT_SUCCESS;
     }
 
@@ -183,7 +236,16 @@ cleanup:
         tinypy_error_release(error);
     }
 
+    if (profile != NULL) {
+        tinypy_build_profile_destroy(profile);
+    }
     tinypy_vm_destroy(vm);
     free(source);
+    free(definitions);
     return result;
+
+invalid_arguments:
+    (void)fprintf(stderr, "Usage: tinypy_compile [-DNAME=literal ...] input output filename exec|eval|single 0|1|2\n");
+    free(definitions);
+    return EXIT_FAILURE;
 }

@@ -93,6 +93,16 @@ if(BUILD_TESTING)
 
     # Python 3 coordinates processes; the Python 2.7 test programs run in tinypy.
     find_package(Python3 3.7 COMPONENTS Interpreter REQUIRED)
+    set(TINYPY_REFERENCE_PYTHON "" CACHE FILEPATH "Optional CPython 2.7.18 oracle for CLI definition tests")
+    set(tinypy_define_reference)
+    if(TINYPY_REFERENCE_PYTHON)
+        list(APPEND tinypy_define_reference --reference "${TINYPY_REFERENCE_PYTHON}")
+    endif()
+    add_test(NAME cli_compile_definitions
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/compile_definitions.py
+            --compiler $<TARGET_FILE:tinypy_compile>
+            --work-dir ${CMAKE_CURRENT_BINARY_DIR}/compile-definitions
+            ${tinypy_define_reference})
     set(tinypy_upstream_runner ${PROJECT_SOURCE_DIR}/tests/upstream/run_tests.py)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/tests/upstream/manifest.json)
     execute_process(

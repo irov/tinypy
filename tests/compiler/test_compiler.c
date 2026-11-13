@@ -2744,7 +2744,7 @@ static int32_t __test_source_positions_and_literals(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __test_debug_flag_profiles(void) {
+static int32_t __test_constant_profiles(void) {
     static const char *const valid[] = {"_DEVELOPMENT", "__DEVELOPMENT", "__QA__", "validationMode2", "_"};
     static const char *const invalid[] = {"", "2FLAG", "dev.flag", "dev-flag", "if", "True", "False", "None", "__debug__", "a\0b", "\xc3\xa9"};
     test_allocator_state_t state = {0U, 0U};
@@ -2764,208 +2764,520 @@ static int32_t __test_debug_flag_profiles(void) {
     (void)memset(constants, 0, sizeof(constants));
     constants[0].abi_version = TINYPY_COMPILER_ABI_VERSION;
     constants[0].struct_size = (uint32_t)sizeof(constants[0]);
-    tinypy_build_value_init(&constants[0].value, TINYPY_BUILD_VALUE_DEBUG_FLAG);
+    tinypy_build_value_init(&constants[0].value, TINYPY_BUILD_VALUE_BOOL);
     for (size_t index = 0U; index < sizeof(valid) / sizeof(valid[0]); ++index) {
         constants[0].name = valid[index];
         constants[0].name_size = strlen(valid[index]);
-        assert(tinypy_build_profile_create(&allocator, 0, constants, 1U, NULL, &profile, &error) == TINYPY_BUILD_PROFILE_OK);
+        assert(tinypy_build_profile_create(&allocator, constants, 1U, NULL, &profile, &error) == TINYPY_BUILD_PROFILE_OK);
         tinypy_build_profile_destroy(profile);
     }
     for (size_t index = 0U; index < sizeof(invalid) / sizeof(invalid[0]); ++index) {
         constants[0].name = invalid[index];
         constants[0].name_size = index == 9U ? 3U : strlen(invalid[index]);
-        assert(tinypy_build_profile_create(&allocator, 0, constants, 1U, NULL, &profile, &error) == TINYPY_BUILD_PROFILE_INVALID_NAME);
+        assert(tinypy_build_profile_create(&allocator, constants, 1U, NULL, &profile, &error) == TINYPY_BUILD_PROFILE_INVALID_NAME);
         assert(profile == NULL && error.constant_index == 0U);
     }
     constants[0].name = "__NDEBUG__";
     constants[0].name_size = 10U;
-    assert(tinypy_build_profile_create(&allocator, 0, constants, 1U, NULL, &profile, &error) == TINYPY_BUILD_PROFILE_NDEBUG_OVERRIDE);
+    assert(tinypy_build_profile_create(&allocator, constants, 1U, NULL, &profile, &error) == TINYPY_BUILD_PROFILE_OK);
+    tinypy_build_profile_destroy(profile);
     constants[0].name = "_DEVELOPMENT";
     constants[0].name_size = 12U;
     constants[1] = constants[0];
-    assert(tinypy_build_profile_create(&allocator, 0, constants, 2U, NULL, &profile, &error) == TINYPY_BUILD_PROFILE_DUPLICATE_NAME);
-    tinypy_build_value_init(&constants[0].value, TINYPY_BUILD_VALUE_BOOL);
-    assert(tinypy_build_profile_create(&allocator, 0, constants, 1U, NULL, &profile, &error) == TINYPY_BUILD_PROFILE_INVALID_NAME);
+    assert(tinypy_build_profile_create(&allocator, constants, 2U, NULL, &profile, &error) == TINYPY_BUILD_PROFILE_DUPLICATE_NAME);
     constants[0].name = "__QA__";
     constants[0].name_size = 6U;
-    assert(tinypy_build_profile_create(&allocator, 0, constants, 1U, NULL, &other, &error) == TINYPY_BUILD_PROFILE_OK);
-    tinypy_build_value_init(&constants[0].value, TINYPY_BUILD_VALUE_DEBUG_FLAG);
-    assert(tinypy_build_profile_create(&allocator, 0, constants, 1U, NULL, &profile, &error) == TINYPY_BUILD_PROFILE_OK);
+    assert(tinypy_build_profile_create(&allocator, constants, 1U, NULL, &other, &error) == TINYPY_BUILD_PROFILE_OK);
+    constants[0].value.integer_value = 1;
+    assert(tinypy_build_profile_create(&allocator, constants, 1U, NULL, &profile, &error) == TINYPY_BUILD_PROFILE_OK);
     assert(memcmp(tinypy_build_profile_digest(profile), tinypy_build_profile_digest(other), TINYPY_BUILD_PROFILE_DIGEST_SIZE) != 0);
     tinypy_build_profile_destroy(profile);
     tinypy_build_profile_destroy(other);
     tinypy_build_value_init(&constants[0].value, TINYPY_BUILD_VALUE_TUPLE);
+    constants[1].value.type = 9U;
     constants[0].value.items = &constants[1].value;
     constants[0].value.item_count = 1U;
-    assert(tinypy_build_profile_create(&allocator, 0, constants, 1U, NULL, &profile, &error) == TINYPY_BUILD_PROFILE_INVALID_VALUE_TYPE);
+    assert(tinypy_build_profile_create(&allocator, constants, 1U, NULL, &profile, &error) == TINYPY_BUILD_PROFILE_INVALID_VALUE_TYPE);
     assert(profile == NULL && error.value_depth == 1U);
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
-static int32_t __test_preprocessor_debug_flags(void) {
-    static const char guard[] = "if _DEVELOPMENT is True:\n    body_only()\nelif other_flag:\n    elif_only()\nelse:\n    else_only()\n";
-    static const char source[] =
-        "events = []\n"
-        "def probe():\n    events.append(90)\n    return True\n"
-        "for _DEVELOPMENT in (False, True):\n"
-        "    if _DEVELOPMENT is True:\n        events.append(1)\n    else:\n        events.append(2)\n"
-        "    if not _DEVELOPMENT:\n        events.append(3)\n    else:\n        events.append(4)\n"
-        "    if _DEVELOPMENT or True:\n        events.append(5)\n"
-        "    if probe() and _DEVELOPMENT:\n        events.append(6)\n"
-        "    if True:\n        events.append(7)\n"
-        "    if __debug__ is True and _DEVELOPMENT is True:\n        events.append(18)\n"
-        "__QA__ = False\n"
-        "if __QA__:\n    events.append(8)\nelse:\n    events.append(9)\n"
-        "if False:\n    events.append(91)\nelif __QA__:\n    events.append(92)\nelse:\n    events.append(93)\n"
-        "outside = 41\n"
-        "def local_scope():\n    if _DEVELOPMENT:\n        outside = 99\n    return outside\n"
-        "def possible_generator():\n    if _DEVELOPMENT:\n        yield 1\n"
-        "def nested(flag):\n    if flag:\n        if _DEVELOPMENT:\n            events.append(94)\n    else:\n        if __QA__:\n            events.append(95)\n"
-        "nested(True)\nnested(False)\n"
-        "def local_flag(_DEVELOPMENT):\n    if _DEVELOPMENT:\n        events.append(16)\n    else:\n        events.append(17)\n"
-        "local_flag(False)\nlocal_flag(True)\n"
-        "class Settings(object):\n    pass\n"
-        "settings = Settings()\nsettings._DEVELOPMENT = True\n"
-        "if settings._DEVELOPMENT:\n    events.append(14)\n"
-        "if '_DEVELOPMENT':\n    events.append(15)\n"
-        "readback = _DEVELOPMENT\n"
-        "exec 'if _DEVELOPMENT:\\n    events.append(10)\\nelse:\\n    events.append(11)\\n'\n"
-        "dynamic = compile('if _DEVELOPMENT:\\n    events.append(12)\\nelse:\\n    events.append(13)\\n', '<dynamic>', 'exec', 0, True)\n"
-        "exec dynamic\n"
-        "for ordinary_flag in (False, True):\n"
-        "    if _DEVELOPMENT:\n        events.append(20)\n    elif ordinary_flag:\n        events.append(21)\n    else:\n        events.append(22)\n"
-        "    if ordinary_flag:\n        events.append(23)\n    elif __QA__:\n        events.append(24)\n    elif _DEVELOPMENT:\n        events.append(25)\n    else:\n        events.append(26)\n"
-        "if _DEVELOPMENT:\n"
-        "    class TaskDescBase(object):\n        marker = 20\n"
-        "else:\n"
-        "    class TaskDescBase(object):\n        marker = 42\n"
-        "task_marker = TaskDescBase().marker\n"
-        "def local_class():\n"
-        "    if _DEVELOPMENT:\n        class LocalBase(object):\n            marker = 20\n"
-        "    else:\n        class LocalBase(object):\n            marker = 42\n"
-        "    return LocalBase.marker\n"
-        "local_marker = local_class()\n"
-        "class MethodGuard(object):\n"
-        "    def marker(self):\n"
-        "        if _DEVELOPMENT:\n            return 20\n        else:\n            retained = 42\n            return retained\n"
-        "method_marker = MethodGuard().marker()\n"
-        "def retained_generator():\n    if _DEVELOPMENT:\n        return\n    else:\n        yield 42\n"
-        "retained_yields = list(retained_generator())\n";
-    static const int64_t debug_events[] = {2, 3, 5, 90, 7, 1, 4, 5, 90, 6, 7, 18, 9, 93, 94, 17, 16, 14, 15, 10, 12, 20, 25, 20, 23};
-    static const int64_t release_events[] = {2, 4, 7, 2, 4, 7, 9, 93, 17, 17, 14, 15, 11, 13, 22, 26, 21, 23};
+static tinypy_allocator_t __test_counting_allocator(test_allocator_state_t *state) {
+    tinypy_allocator_t allocator;
 
+    (void)memset(&allocator, 0, sizeof(allocator));
+    allocator.abi_version = TINYPY_ABI_VERSION;
+    allocator.struct_size = (uint32_t)sizeof(allocator);
+    allocator.user_data = state;
+    allocator.allocate = &__test_allocate;
+    allocator.reallocate = &__test_reallocate;
+    allocator.deallocate = &__test_deallocate;
+    return allocator;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_constant_definitions(void) {
+    static const char *const definitions[] = {
+        "_DEVELOPMENT=False", "enabled=True", "nothing=None", "version=42",
+        "negative=-13", "positive=+7", "ratio=-0.5", "huge=123456789012345678901234567890L",
+        "channel='stable'", "label=u'\\u041f\\u0440\\u0438\\u0432\\u0435\\u0442'",
+        "items=(None, True, False, -5, (u'text', 17L))", "__NDEBUG__=False",
+        "spaced= \t\n(1, 'two')", "surrogates=u'\\ud83d\\ude00\\udc00'"
+    };
+    static const struct {
+        const char *definition;
+        tinypy_build_profile_result_e result;
+    } invalid[] = {
+        {"FLAG", TINYPY_BUILD_PROFILE_INVALID_DEFINITION}, {"FLAG=", TINYPY_BUILD_PROFILE_INVALID_DEFINITION},
+        {"=False", TINYPY_BUILD_PROFILE_INVALID_NAME}, {"2FLAG=False", TINYPY_BUILD_PROFILE_INVALID_NAME},
+        {"if=False", TINYPY_BUILD_PROFILE_INVALID_NAME}, {"__debug__=False", TINYPY_BUILD_PROFILE_INVALID_NAME},
+        {"FLAG =False", TINYPY_BUILD_PROFILE_INVALID_NAME}, {"FLAG=unknown", TINYPY_BUILD_PROFILE_INVALID_DEFINITION},
+        {"FLAG=unknown()", TINYPY_BUILD_PROFILE_INVALID_DEFINITION}, {"FLAG=object.attr", TINYPY_BUILD_PROFILE_INVALID_DEFINITION},
+        {"FLAG=1 + 2", TINYPY_BUILD_PROFILE_INVALID_DEFINITION}, {"FLAG=1 // 0", TINYPY_BUILD_PROFILE_INVALID_DEFINITION},
+        {"FLAG=not False", TINYPY_BUILD_PROFILE_INVALID_DEFINITION}, {"FLAG=[1, 2]", TINYPY_BUILD_PROFILE_INVALID_DEFINITION},
+        {"FLAG={1: 2}", TINYPY_BUILD_PROFILE_INVALID_DEFINITION}, {"FLAG=1j", TINYPY_BUILD_PROFILE_INVALID_DEFINITION},
+        {"FLAG='open", TINYPY_BUILD_PROFILE_INVALID_DEFINITION}, {"FLAG= # coding: unknown\nFalse", TINYPY_BUILD_PROFILE_INVALID_DEFINITION},
+        {"FLAG=\357\273\277False", TINYPY_BUILD_PROFILE_INVALID_DEFINITION}
+    };
+    static const char *const rebound[] = {
+        "_DEVELOPMENT = True\n", "del _DEVELOPMENT\n",
+        "def f(_DEVELOPMENT):\n    pass\n", "import _DEVELOPMENT\n",
+        "from module import name as _DEVELOPMENT\n"
+    };
+    static const char source[] =
+        "values = (_DEVELOPMENT, enabled, nothing, version, negative, positive, ratio, huge, channel, label, items, __NDEBUG__)\n"
+        "dynamic = (eval('_DEVELOPMENT'), eval('__NDEBUG__'))\n"
+        "same = spaced == (1, 'two') and surrogates == u'\\ud83d\\ude00\\udc00' and len(surrogates) == len(u'\\ud83d\\ude00\\udc00')\n"
+        "debug = __debug__\n"
+        "unregistered = '__MISSING__'\n";
+    test_allocator_state_t profile_state = {0U, 0U};
+    tinypy_allocator_t allocator = __test_counting_allocator(&profile_state);
+    tinypy_build_profile_t *profile = NULL;
+    tinypy_build_profile_error_t profile_error;
+    test_allocator_state_t parse_state = {0U, 0U};
+    tinypy_vm_t *vm = __test_vm_create(&parse_state, 0);
+
+    /* The profile belongs to its allocator and outlives the parsing VM. */
+    assert(tinypy_build_profile_parse(vm, &allocator, definitions, sizeof(definitions) / sizeof(definitions[0]), NULL, &profile, &profile_error) == TINYPY_BUILD_PROFILE_OK);
+    tinypy_vm_destroy(vm);
+    assert(parse_state.allocations == 0U && parse_state.bytes == 0U);
+    assert(tinypy_build_profile_constant_count(profile) == sizeof(definitions) / sizeof(definitions[0]));
+    const tinypy_build_value_t *value;
+    assert(tinypy_build_profile_find(profile, "_DEVELOPMENT", 12U, &value) != 0 && value->type == TINYPY_BUILD_VALUE_BOOL && value->integer_value == 0);
+    assert(tinypy_build_profile_find(profile, "enabled", 7U, &value) != 0 && value->type == TINYPY_BUILD_VALUE_BOOL && value->integer_value == 1);
+    assert(tinypy_build_profile_find(profile, "version", 7U, &value) != 0 && value->type == TINYPY_BUILD_VALUE_INTEGER && value->integer_value == 42);
+    assert(tinypy_build_profile_find(profile, "negative", 8U, &value) != 0 && value->integer_value == -13);
+    assert(tinypy_build_profile_find(profile, "positive", 8U, &value) != 0 && value->integer_value == 7);
+    assert(tinypy_build_profile_find(profile, "ratio", 5U, &value) != 0 && value->type == TINYPY_BUILD_VALUE_FLOAT && value->float_value == -0.5);
+    assert(tinypy_build_profile_find(profile, "huge", 4U, &value) != 0 && value->type == TINYPY_BUILD_VALUE_LONG && value->long_digit_count > 1U);
+    assert(tinypy_build_profile_find(profile, "items", 5U, &value) != 0 && value->type == TINYPY_BUILD_VALUE_TUPLE && value->item_count == 5U);
+    /* One profile serves every optimize level; only __debug__ follows it. */
     for (int32_t optimize = 0; optimize <= 2; ++optimize) {
         test_allocator_state_t state = {0U, 0U};
-        tinypy_vm_t *vm = __test_vm_create(&state, optimize);
-        tinypy_allocator_t allocator = tinypy_internal_vm_heap_allocator(vm);
-        tinypy_build_constant_t constants[2];
+        tinypy_error_t *error = NULL;
+        vm = __test_vm_create(&state, 0);
+        tinypy_compile_options_t options;
+        tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+        options.optimize_level = optimize;
+        options.feature_flags = (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR;
+        options.build_profile = profile;
+        tinypy_value_t *globals = tinypy_dict_new(vm);
+        tinypy_value_t *result = tinypy_exec_source(vm, source, sizeof(source) - 1U, "constants.py", 12U, globals, NULL, &options, &error);
+        assert(result != NULL && error == NULL);
+        tinypy_release(result);
+        tinypy_value_t *values = __test_dict_get(vm, globals, "values", 6U);
+        assert(tinypy_typeof(tinypy_tuple_get(values, 0U)) == TINYPY_VALUE_BOOL && tinypy_bool_as_i32(tinypy_tuple_get(values, 0U)) == 0);
+        assert(tinypy_typeof(tinypy_tuple_get(values, 7U)) == TINYPY_VALUE_LONG);
+        assert(tinypy_typeof(tinypy_tuple_get(values, 9U)) == TINYPY_VALUE_UNICODE);
+        assert(tinypy_typeof(tinypy_tuple_get(values, 10U)) == TINYPY_VALUE_TUPLE);
+        tinypy_value_t *dynamic = __test_dict_get(vm, globals, "dynamic", 7U);
+        assert(tinypy_bool_as_i32(tinypy_tuple_get(dynamic, 0U)) == 0);
+        assert(tinypy_bool_as_i32(tinypy_tuple_get(dynamic, 1U)) == 0);
+        assert(tinypy_bool_as_i32(__test_dict_get(vm, globals, "same", 4U)) == 1);
+        assert(tinypy_bool_as_i32(__test_dict_get(vm, globals, "debug", 5U)) == (optimize == 0 ? 1 : 0));
+        for (size_t index = 0U; index < sizeof(rebound) / sizeof(rebound[0]); ++index) {
+            result = tinypy_compile_source(vm, rebound[index], strlen(rebound[index]), "constants.py", 12U, &options, &error);
+            assert(result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_PREPROCESSOR);
+            tinypy_error_release(error);
+            error = NULL;
+        }
+        tinypy_dict_clear(globals);
+        tinypy_release(globals);
+        tinypy_vm_destroy(vm);
+        assert(state.allocations == 0U && state.bytes == 0U);
+    }
+    tinypy_build_profile_destroy(profile);
+
+    vm = __test_vm_create(&parse_state, 0);
+    /* constant_index names the failed definition after a valid one. */
+    for (size_t index = 0U; index < sizeof(invalid) / sizeof(invalid[0]); ++index) {
+        const char *pair[2] = {"VALID=1", invalid[index].definition};
+        profile = (tinypy_build_profile_t *)&profile_error;
+        assert(tinypy_build_profile_parse(vm, &allocator, pair, 2U, NULL, &profile, &profile_error) == invalid[index].result);
+        assert(profile == NULL && profile_error.code == invalid[index].result && profile_error.constant_index == 1U && profile_error.message_size != 0U);
+    }
+    tinypy_build_profile_limits_t limits;
+    tinypy_build_profile_limits_init(&limits);
+    char nested[512];
+    size_t depth = limits.max_depth + 1U;
+    size_t offset = (size_t)snprintf(nested, sizeof(nested), "FLAG=");
+    assert(offset + depth * 3U + 2U < sizeof(nested));
+    for (size_t index = 0U; index < depth; ++index) {
+        nested[offset++] = '(';
+    }
+    nested[offset++] = '0';
+    for (size_t index = 0U; index < depth; ++index) {
+        nested[offset++] = ',';
+        nested[offset++] = ')';
+    }
+    nested[offset] = '\0';
+    const char *deep = nested;
+    assert(tinypy_build_profile_parse(vm, &allocator, &deep, 1U, NULL, &profile, &profile_error) == TINYPY_BUILD_PROFILE_LIMIT_EXCEEDED);
+    assert(profile == NULL && profile_error.constant_index == 0U);
+    static const char *const duplicate[] = {"FLAG=False", "OTHER=0", "FLAG=True"};
+    assert(tinypy_build_profile_parse(vm, &allocator, duplicate, 3U, NULL, &profile, &profile_error) == TINYPY_BUILD_PROFILE_DUPLICATE_NAME);
+    assert(profile == NULL && profile_error.constant_index == 2U);
+    assert(tinypy_build_profile_parse(vm, &allocator, NULL, 0U, NULL, &profile, &profile_error) == TINYPY_BUILD_PROFILE_OK);
+    assert(tinypy_build_profile_constant_count(profile) == 0U);
+    assert(tinypy_build_profile_find(profile, "__NDEBUG__", 10U, &value) == 0);
+    tinypy_build_profile_destroy(profile);
+
+    /* Every definition parses in an arena of its own, so the default
+       constant limit, not the compiler arena, bounds the count. */
+    size_t count = limits.max_constants + 1U;
+    char *names = (char *)malloc(count * 16U);
+    const char **many = (const char **)malloc(count * sizeof(*many));
+    assert(names != NULL && many != NULL);
+    for (size_t index = 0U; index < count; ++index) {
+        int written = snprintf(names + index * 16U, 16U, "NAME%zu=%zu", index, index);
+        assert(written > 0 && written < 16);
+        many[index] = names + index * 16U;
+    }
+    assert(tinypy_build_profile_parse(vm, &allocator, many, count - 1U, NULL, &profile, &profile_error) == TINYPY_BUILD_PROFILE_OK);
+    assert(tinypy_build_profile_constant_count(profile) == count - 1U);
+    tinypy_build_profile_destroy(profile);
+    assert(tinypy_build_profile_parse(vm, &allocator, many, count, NULL, &profile, &profile_error) == TINYPY_BUILD_PROFILE_LIMIT_EXCEEDED);
+    assert(profile == NULL);
+    free(many);
+    free(names);
+    tinypy_vm_destroy(vm);
+    assert(parse_state.allocations == 0U && parse_state.bytes == 0U);
+    assert(profile_state.allocations == 0U && profile_state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_constant_definition_codecs(void) {
+    static const char setup[] =
+        "import _codecs\n"
+        "events = []\n"
+        "original_strict = _codecs.lookup_error('strict')\n"
+        "def replacement(error):\n"
+        "    events.append('strict')\n"
+        "    return (u'replaced', error.end)\n"
+        "def search(encoding):\n"
+        "    events.append('lookup')\n"
+        "    return None\n"
+        "_codecs.register_error('strict', replacement)\n"
+        "_codecs.register(search)\n";
+    static const char *const invalid[] = {
+        "VALUE=u'\\uZZZZ'", "VALUE=u'\\xZZ'", "VALUE=u'\\U0000ZZZZ'",
+        "VALUE=u'\\U00110000'", "VALUE=u'\\N'", "VALUE=u'\\N{NO SUCH NAME}'",
+        "VALUE=ur'\\uZZZZ'", "VALUE=ur'\\U00110000'",
+        "VALUE=u'\xff'", "VALUE=u'\xe2\x28\xa1'",
+        "VALUE='\\xff' u''", "VALUE=u'' '\\xff'",
+        "VALUE=(True, (u'\\xZZ',))", "VALUE=unknown(u'\\uZZZZ')",
+        "VALUE= # coding: definition-callback\nFalse"
+    };
+    static const struct {
+        const char *definition;
+        tinypy_build_value_type_e type;
+        const char *data;
+    } valid[] = {
+        {"VALUE=u'\\u0041\\N{SNOWMAN}'", TINYPY_BUILD_VALUE_UNICODE, "A\342\230\203"},
+        {"VALUE=ur'\\u0041'", TINYPY_BUILD_VALUE_UNICODE, "A"},
+        {"VALUE=u'\342\230\203'", TINYPY_BUILD_VALUE_UNICODE, "\342\230\203"},
+        {"VALUE='\\xff'", TINYPY_BUILD_VALUE_STRING, "\xff"},
+        {"VALUE='a' u'b'", TINYPY_BUILD_VALUE_UNICODE, "ab"},
+        {"VALUE=u'a' 'b'", TINYPY_BUILD_VALUE_UNICODE, "ab"}
+    };
+    static const char *const normal[] = {
+        "value = u'\\uZZZZ'\n",
+        "# coding: utf-8\nvalue = u'\xff'\n",
+        "value = '\\xff' u''\n"
+    };
+    test_allocator_state_t state = {0U, 0U};
+    test_allocator_state_t profile_state = {0U, 0U};
+    tinypy_allocator_t allocator = __test_counting_allocator(&profile_state);
+    tinypy_vm_t *vm = __test_vm_create(&state, 0);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_compile_options_t options;
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    options.flags = (uint32_t)TINYPY_COMPILE_FLAG_STRING_SOURCE;
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *result = tinypy_exec_source(vm, setup, sizeof(setup) - 1U, "codec.py", 8U, globals, NULL, &options, &error);
+    assert(result != NULL && error == NULL);
+    tinypy_release(result);
+    tinypy_value_t *events = __test_dict_get(vm, globals, "events", 6U);
+
+    /* Invalid escapes, UTF-8 and implicit byte-to-Unicode coercion must
+       fail without consulting the VM's error handlers or codec search. */
+    for (size_t index = 0U; index < sizeof(invalid) / sizeof(invalid[0]); ++index) {
+        const char *definitions[] = {"VALID=True", invalid[index]};
         tinypy_build_profile_t *profile = NULL;
-        tinypy_build_profile_t *reordered = NULL;
+        tinypy_build_profile_error_t profile_error;
+        assert(tinypy_build_profile_parse(vm, &allocator, definitions, 2U, NULL, &profile, &profile_error) == TINYPY_BUILD_PROFILE_INVALID_DEFINITION);
+        assert(profile == NULL && profile_error.constant_index == 1U);
+        assert(tinypy_list_size(events) == 0U);
+        assert(profile_state.allocations == 0U && profile_state.bytes == 0U);
+    }
+    for (size_t index = 0U; index < sizeof(valid) / sizeof(valid[0]); ++index) {
+        tinypy_build_profile_t *profile = NULL;
+        assert(tinypy_build_profile_parse(vm, &allocator, &valid[index].definition, 1U, NULL, &profile, NULL) == TINYPY_BUILD_PROFILE_OK);
+        const tinypy_build_value_t *value;
+        assert(tinypy_build_profile_find(profile, "VALUE", 5U, &value) != 0);
+        assert(value->type == (uint32_t)valid[index].type);
+        assert(value->data_size == strlen(valid[index].data) && memcmp(value->data, valid[index].data, value->data_size) == 0);
+        assert(tinypy_list_size(events) == 0U);
+        tinypy_build_profile_destroy(profile);
+        assert(profile_state.allocations == 0U && profile_state.bytes == 0U);
+    }
+    /* Parsing definitions leaves the registry and ordinary Python source
+       compilation unchanged, including each of the three callback paths. */
+    for (size_t index = 0U; index < sizeof(normal) / sizeof(normal[0]); ++index) {
+        tinypy_value_t *code = tinypy_compile_source(vm, normal[index], strlen(normal[index]), "codec.py", 8U, &options, &error);
+        assert(code != NULL && error == NULL);
+        assert(tinypy_list_size(events) == index + 1U);
+        tinypy_release(code);
+    }
+    static const char restore[] = "_codecs.register_error('strict', original_strict)\n";
+    result = tinypy_exec_source(vm, restore, sizeof(restore) - 1U, "codec.py", 8U, globals, NULL, &options, &error);
+    assert(result != NULL && error == NULL);
+    tinypy_release(result);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    assert(state.allocations == 0U && state.bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_build_profile_t *__test_constant_profile(tinypy_vm_t *vm, int32_t enabled) {
+    static const char *const names[] = {"_DEVELOPMENT", "__QA__", "validationMode2"};
+    tinypy_build_constant_t constants[3];
+    tinypy_build_profile_t *profile = NULL;
+    tinypy_allocator_t allocator = tinypy_internal_vm_heap_allocator(vm);
+
+    (void)memset(constants, 0, sizeof(constants));
+    for (size_t index = 0U; index < 3U; ++index) {
+        constants[index].abi_version = TINYPY_COMPILER_ABI_VERSION;
+        constants[index].struct_size = (uint32_t)sizeof(constants[index]);
+        constants[index].name = names[index];
+        constants[index].name_size = strlen(names[index]);
+        tinypy_build_value_init(&constants[index].value, TINYPY_BUILD_VALUE_BOOL);
+        constants[index].value.integer_value = enabled;
+    }
+    assert(tinypy_build_profile_create(&allocator, constants, 3U, NULL, &profile, NULL) == TINYPY_BUILD_PROFILE_OK);
+    return profile;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_preprocessor_constant_semantics(void) {
+    static const char source[] =
+        "def check(value):\n    if not value:\n        raise RuntimeError('debug flag regression')\n"
+        "flags = (_DEVELOPMENT, __QA__, validationMode2)\n"
+        "check(flags == (expected, expected, expected))\n"
+        "check(all(type(value) is bool for value in flags))\n"
+        "value = _DEVELOPMENT\n"
+        "check(value is expected)\n"
+        "events = []\n"
+        "if _DEVELOPMENT:\n    events.append('debug')\n"
+        "if _DEVELOPMENT or value is False:\n    events.append('work')\n"
+        "if not _DEVELOPMENT:\n    events.append('release')\n"
+        "if _DEVELOPMENT:\n    events.append('then')\nelse:\n    events.append('else')\n"
+        "for condition in (False, True):\n"
+        "    if condition:\n"
+        "        if __QA__:\n            events.append('nested debug')\n"
+        "        elif not validationMode2:\n            events.append('nested release')\n"
+        "    elif _DEVELOPMENT:\n        events.append('elif')\n"
+        "    else:\n        events.append('fallback')\n"
+        "check(events == (['debug', 'work', 'then', 'elif', 'nested debug'] if expected else ['work', 'release', 'else', 'fallback', 'nested release']))\n"
+        "loaded = []\n"
+        "class Manager(object):\n"
+        "    @staticmethod\n    def loadParams(Database, Param):\n        loaded.append((Database, Param))\n"
+        "values = (False, None, True, 0, 1)\n"
+        "for Database in range(len(values)):\n"
+        "    Development = values[Database]\n    Param = 'params'\n"
+        "    if Development is _DEVELOPMENT or Development is None:\n"
+        "        Manager.loadParams(Database, Param)\n"
+        "check(loaded == ([(1, 'params'), (2, 'params')] if expected else [(0, 'params'), (1, 'params')]))\n"
+        "check((_DEVELOPMENT is False) is (not expected))\n"
+        "check((_DEVELOPMENT is None) is False)\n"
+        "check((False is _DEVELOPMENT is False) is (not expected))\n"
+        "check((0 is _DEVELOPMENT) is False)\n"
+        "def unreachable_effects():\n"
+        "    if probe() and _DEVELOPMENT:\n        dead_local = 1\n        yield dead_local\n"
+        "def dynamic():\n"
+        "    def nested():\n"
+        "        code = compile('validationMode2', '<dynamic>', 'eval', 0, True)\n"
+        "        return eval('_DEVELOPMENT'), eval(code)\n"
+        "    namespace = {}\n"
+        "    exec 'value = __QA__' in globals(), namespace\n"
+        "    return nested() + (namespace['value'],)\n"
+        "check(dynamic() == (expected, expected, expected))\n"
+        "exec 'def dynamic_manager(Development):\\n    if Development is _DEVELOPMENT or Development is None:\\n        return True\\n    return False\\n'\n"
+        "check([dynamic_manager(item) for item in values] == ([False, True, True, False, False] if expected else [True, True, False, False, False]))\n"
+        "complete = True\n";
+    static const struct {
+        const char *source;
+        const char *retained;
+        const char *removed;
+    } render_cases[] = {
+        {"if _DEVELOPMENT:\n    debug_only()\n", "pass", "debug_only"},
+        {"if _DEVELOPMENT or condition:\n    work()\n", "if condition:", "_DEVELOPMENT"},
+        {"if not _DEVELOPMENT:\n    release_only()\n", "release_only()", "if "},
+        {"if _DEVELOPMENT:\n    debug_only()\nelse:\n    release_only()\n", "release_only()", "debug_only"},
+        {"if probe() and _DEVELOPMENT:\n    debug_only()\nelse:\n    release_only()\n", "probe()", "debug_only"},
+        {"if probe() or not _DEVELOPMENT:\n    release_only()\nelse:\n    debug_only()\n", "probe()", "debug_only"},
+        {"if _DEVELOPMENT:\n    debug_only()\nelif condition:\n    work()\nelse:\n    release_only()\n", "if condition:", "debug_only"},
+        {"if not __QA__:\n    release_only()\nelif condition:\n    dead_elif()\nelse:\n    dead_else()\n", "release_only()", "if "},
+        {"value = validationMode2\n", "False", "validationMode2"},
+        {"if Development is _DEVELOPMENT or Development is None:\n    Manager.loadParams(Database, Param)\n", "loadParams", "_DEVELOPMENT"},
+        {"if probe() and _DEVELOPMENT and unreachable():\n    debug_only()\n", "probe()", "unreachable"}
+    };
+
+    for (int32_t variant = 0; variant < 6; ++variant) {
+        int32_t optimize = variant % 3;
+        int32_t enabled = variant / 3;
+        test_allocator_state_t state = {0U, 0U};
+        /* Dynamic compilation must inherit the code's optimize level even
+           when the VM default differs. */
+        tinypy_vm_t *vm = __test_vm_create(&state, 0);
+        tinypy_build_profile_t *profile = __test_constant_profile(vm, enabled);
         tinypy_compile_options_t options;
         tinypy_error_t *error = NULL;
-        char development_name[] = "_DEVELOPMENT";
+        tinypy_value_t *codes[2] = {NULL, NULL};
 
-        (void)memset(constants, 0, sizeof(constants));
-        constants[0].abi_version = TINYPY_COMPILER_ABI_VERSION;
-        constants[0].struct_size = (uint32_t)sizeof(constants[0]);
-        constants[0].name = development_name;
-        constants[0].name_size = sizeof(development_name) - 1U;
-        tinypy_build_value_init(&constants[0].value, TINYPY_BUILD_VALUE_DEBUG_FLAG);
-        constants[1] = constants[0];
-        constants[1].name = "__QA__";
-        constants[1].name_size = 6U;
-        assert(tinypy_build_profile_create(&allocator, optimize, constants, 2U, NULL, &profile, NULL) == TINYPY_BUILD_PROFILE_OK);
-        tinypy_build_constant_t swap = constants[0];
-        constants[0] = constants[1];
-        constants[1] = swap;
-        assert(tinypy_build_profile_create(&allocator, optimize, constants, 2U, NULL, &reordered, NULL) == TINYPY_BUILD_PROFILE_OK);
-        assert(memcmp(tinypy_build_profile_digest(profile), tinypy_build_profile_digest(reordered), TINYPY_BUILD_PROFILE_DIGEST_SIZE) == 0);
-        tinypy_build_profile_destroy(reordered);
-        /* Both the profile and the code must own their name copies. */
-        development_name[1] = 'X';
+        tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+        options.optimize_level = optimize;
+        options.feature_flags = (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR;
+        options.build_profile = profile;
+        if (enabled == 0) {
+            for (size_t index = 0U; index < sizeof(render_cases) / sizeof(render_cases[0]); ++index) {
+                tinypy_preprocess_result_t *preprocessed = tinypy_preprocess_source(vm, render_cases[index].source, strlen(render_cases[index].source), "flags.py", 8U, &options, &error);
+                assert(preprocessed != NULL && error == NULL);
+                const char *expanded = tinypy_preprocess_result_expanded_source(preprocessed, NULL);
+                assert(strstr(expanded, render_cases[index].retained) != NULL);
+                assert(strstr(expanded, render_cases[index].removed) == NULL);
+                tinypy_preprocess_result_destroy(preprocessed);
+            }
+        }
+        codes[0] = tinypy_compile_source(vm, source, sizeof(source) - 1U, "flags.py", 8U, &options, &error);
+        assert(codes[0] != NULL && error == NULL);
+        size_t marshal_size;
+        uint8_t *marshal_bytes = __test_marshal_dump(codes[0], &marshal_size);
+        assert(tinypy_marshal_load_code_v2(vm, marshal_bytes, marshal_size, NULL, &codes[1], NULL) == TINYPY_MARSHAL_OK);
+        free(marshal_bytes);
+        assert(tinypy_code_set_compile_options(codes[1], options.feature_flags, optimize, profile, &error) != 0 && error == NULL);
+        tinypy_build_profile_destroy(profile);
+        options.build_profile = NULL;
+        for (size_t route = 0U; route < 2U; ++route) {
+            tinypy_value_t *effect_code = __test_find_nested_code(codes[route], "unreachable_effects", 19U);
+            assert(effect_code != NULL);
+            assert(((tinypy_code_flags(effect_code) & TINYPY_CODE_GENERATOR) != 0U) == (enabled != 0));
+            assert(tinypy_tuple_size(tinypy_code_varnames(effect_code)) == (enabled != 0 ? 1U : 0U));
+            tinypy_value_t *globals = tinypy_dict_new(vm);
+            tinypy_value_t *expected_key = tinypy_string_from_bytes(vm, "expected", 8U);
+            tinypy_value_t *expected_value = tinypy_bool_from_i32(vm, enabled);
+            tinypy_dict_set(globals, expected_key, expected_value);
+            tinypy_release(expected_key);
+            tinypy_release(expected_value);
+            tinypy_value_t *result = tinypy_exec_code(codes[route], globals, NULL, &error);
+            assert(result != NULL && error == NULL);
+            tinypy_release(result);
+            assert(tinypy_bool_as_i32(__test_dict_get(vm, globals, "complete", 8U)) != 0);
+            tinypy_release(codes[route]);
+            tinypy_dict_clear(globals);
+            tinypy_release(globals);
+        }
+        tinypy_vm_destroy(vm);
+        assert(state.allocations == 0U && state.bytes == 0U);
+    }
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Compare callback order, repeated truth tests and exception paths against
+   ordinary compilation of the explicitly substituted expression. */
+static int32_t __test_preprocessor_constant_observations(void) {
+    static const char *const expressions[] = {
+        "%s", "not %s", "%s or probe()", "%s and probe()",
+        "probe() and %s", "probe() or not %s",
+        "probe() and %s and after()", "probe() or not %s or after()",
+        "not (probe() and %s)", "not (probe() or not %s)",
+        "(%s or probe()) and after()", "(probe() and %s) or after()",
+        "(probe() or not %s) and after()", "not ((probe() and %s) or after())",
+        "not ((probe() or not %s) and after())",
+        "((probe() and %s) or False) and after()",
+        "not (((probe() and %s) or False) and after())",
+        "probe() and (%s or after())", "probe() or (%s and after())",
+        "(1 // 0) and %s", "%s and (1 // 0)", "%s or (1 // 0)",
+        "missing and %s", "%s or missing", "%s is False and probe()",
+        "probe() is %s or after() is None", "False is %s is after()",
+        "(probe() if %s else after())", "[%s, probe()][0]",
+        "%s or ({}[0])", "%s or (1 in 1)"
+    };
+    static const char *const answers[] = {"[False]", "[True]", "[False, True]", "[True, False]", "[None]", "[False, None]", "[True, None]"};
+    static const char source_format[] =
+        "trace = []\nanswers = %s\n"
+        "def truth():\n"
+        "    trace.append('truth')\n"
+        "    answer = answers.pop(0) if len(answers) > 1 else answers[0]\n"
+        "    if answer is None:\n        raise ValueError('truth')\n"
+        "    return answer\n"
+        "class TruthProbe(object):\n    def __nonzero__(self):\n        return truth()\n"
+        "class LengthProbe(object):\n    def __len__(self):\n        return int(truth())\n"
+        "def probe():\n    trace.append('probe')\n    return %s()\n"
+        "def after():\n    trace.append('after')\n    return probe()\n"
+        "try:\n    if %s:\n        trace.append('then')\n    else:\n        trace.append('else')\n"
+        "except Exception as error:\n    trace.append(type(error).__name__)\n";
+
+    for (int32_t variant = 0; variant < 6; ++variant) {
+        int32_t optimize = variant % 3;
+        int32_t enabled = variant / 3;
+        test_allocator_state_t state = {0U, 0U};
+        tinypy_vm_t *vm = __test_vm_create(&state, optimize);
+        tinypy_build_profile_t *profile = __test_constant_profile(vm, enabled);
+        tinypy_compile_options_t options;
+        tinypy_error_t *error = NULL;
+
         tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
         options.optimize_level = optimize;
         options.build_profile = profile;
-        tinypy_value_t *code = tinypy_compile_source(vm, guard, sizeof(guard) - 1U, "flags.py", 8U, &options, &error);
-        assert(code != NULL && error == NULL && tinypy_tuple_size(tinypy_code_names(code)) != 0U);
-        tinypy_release(code);
-        options.feature_flags = (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR;
-        code = tinypy_compile_source(vm, guard, sizeof(guard) - 1U, "flags.py", 8U, &options, &error);
-        assert(code != NULL && error == NULL);
-        assert(tinypy_tuple_size(tinypy_code_names(code)) == (optimize == 0 ? 6U : 3U));
-        tinypy_release(code);
-        tinypy_preprocess_result_t *preprocessed = tinypy_preprocess_source(vm, guard, sizeof(guard) - 1U, "flags.py", 8U, &options, &error);
-        assert(preprocessed != NULL && error == NULL);
-        size_t expanded_size;
-        const char *expanded = tinypy_preprocess_result_expanded_source(preprocessed, &expanded_size);
-        assert(expanded_size != 0U);
-        if (optimize != 0) {
-            assert(strstr(expanded, "_DEVELOPMENT") == NULL && strstr(expanded, "body_only") == NULL);
-            assert(strstr(expanded, "other_flag") != NULL && strstr(expanded, "elif_only") != NULL && strstr(expanded, "else_only") != NULL);
+        for (size_t index = 0U; index < sizeof(expressions) / sizeof(expressions[0]); ++index) {
+            for (size_t answer = 0U; answer < sizeof(answers) / sizeof(answers[0]); ++answer) {
+                for (int32_t protocol = 0; protocol < 2; ++protocol) {
+                    tinypy_value_t *globals[2];
+                    for (size_t route = 0U; route < 2U; ++route) {
+                        char expression[256];
+                        char source[2048];
+                        int written = snprintf(expression, sizeof(expression), expressions[index], route == 0U ? "_DEVELOPMENT" : (enabled != 0 ? "True" : "False"));
+                        assert(written > 0 && (size_t)written < sizeof(expression));
+                        written = snprintf(source, sizeof(source), source_format, answers[answer], protocol == 0 ? "TruthProbe" : "LengthProbe", expression);
+                        assert(written > 0 && (size_t)written < sizeof(source));
+                        options.feature_flags = route == 0U ? (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR : 0U;
+                        globals[route] = tinypy_dict_new(vm);
+                        tinypy_value_t *result = tinypy_exec_source(vm, source, (size_t)written, "trace.py", 8U, globals[route], NULL, &options, &error);
+                        assert(result != NULL && error == NULL);
+                        tinypy_release(result);
+                    }
+                    tinypy_value_t *actual = __test_dict_get(vm, globals[0], "trace", 5U);
+                    tinypy_value_t *expected = __test_dict_get(vm, globals[1], "trace", 5U);
+                    assert(tinypy_compare_bool(actual, expected, TINYPY_COMPARE_EQUAL, &error) != 0 && error == NULL);
+                    for (size_t route = 0U; route < 2U; ++route) {
+                        tinypy_dict_clear(globals[route]);
+                        tinypy_release(globals[route]);
+                    }
+                }
+            }
         }
-        else {
-            assert(strstr(expanded, "_DEVELOPMENT") != NULL && strstr(expanded, "else_only") != NULL);
-        }
-        tinypy_preprocess_result_destroy(preprocessed);
-        code = tinypy_compile_source(vm, source, sizeof(source) - 1U, "flags.py", 8U, &options, &error);
-        assert(code != NULL && error == NULL);
-        size_t marshal_size;
-        uint8_t *marshal_bytes = __test_marshal_dump(code, &marshal_size);
-        tinypy_release(code);
-        code = NULL;
-        assert(tinypy_marshal_load_code_v2(vm, marshal_bytes, marshal_size, NULL, &code, NULL) == TINYPY_MARSHAL_OK);
-        free(marshal_bytes);
-        assert(tinypy_code_set_compile_options(code, options.feature_flags, optimize, profile, &error) != 0 && error == NULL);
-        /* Rejected replacements must preserve the valid environment. */
-        assert(tinypy_code_set_compile_options(code, UINT32_MAX, optimize, profile, &error) == 0);
-        assert(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_TYPE);
-        tinypy_error_release(error);
-        error = NULL;
-        assert(tinypy_code_set_compile_options(code, options.feature_flags, (optimize + 1) % 3, profile, &error) == 0);
-        assert(error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_TYPE);
-        tinypy_error_release(error);
-        error = NULL;
         tinypy_build_profile_destroy(profile);
-        options.build_profile = NULL;
-        tinypy_value_t *local_code = __test_find_nested_code(code, "local_scope", 11U);
-        tinypy_value_t *generator_code = __test_find_nested_code(code, "possible_generator", 18U);
-        assert(local_code != NULL && generator_code != NULL);
-        assert(tinypy_tuple_size(tinypy_code_varnames(local_code)) == (optimize == 0 ? 1U : 0U));
-        assert(((tinypy_code_flags(generator_code) & TINYPY_CODE_GENERATOR) != 0U) == (optimize == 0));
-        tinypy_value_t *retained_generator_code = __test_find_nested_code(code, "retained_generator", 18U);
-        assert(retained_generator_code != NULL && (tinypy_code_flags(retained_generator_code) & TINYPY_CODE_GENERATOR) != 0U);
-        assert(__test_find_nested_code(code, "TaskDescBase", 12U) != NULL);
-        assert(__test_find_nested_code(code, "LocalBase", 9U) != NULL);
-        tinypy_value_t *globals = tinypy_dict_new(vm);
-        tinypy_value_t *result = tinypy_exec_code(code, globals, NULL, &error);
-        assert(result != NULL && error == NULL);
-        tinypy_release(result);
-        tinypy_value_t *events = __test_dict_get(vm, globals, "events", 6U);
-        size_t expected_count = optimize == 0 ? sizeof(debug_events) / sizeof(debug_events[0]) : sizeof(release_events) / sizeof(release_events[0]);
-        const int64_t *expected = optimize == 0 ? debug_events : release_events;
-        assert(tinypy_list_size(events) == expected_count);
-        for (size_t index = 0U; index < expected_count; ++index) {
-            assert(tinypy_integer_as_i64(tinypy_list_get(events, index)) == expected[index]);
-        }
-        assert(tinypy_bool_as_i32(__test_dict_get(vm, globals, "readback", 8U)) != 0);
-        int64_t expected_marker = optimize == 0 ? 20 : 42;
-        assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "task_marker", 11U)) == expected_marker);
-        assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "local_marker", 12U)) == expected_marker);
-        assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "method_marker", 13U)) == expected_marker);
-        tinypy_value_t *retained_yields = __test_dict_get(vm, globals, "retained_yields", 15U);
-        assert(tinypy_list_size(retained_yields) == (optimize == 0 ? 0U : 1U));
-        if (optimize != 0) {
-            assert(tinypy_integer_as_i64(tinypy_list_get(retained_yields, 0U)) == 42);
-        }
-        if (optimize != 0) {
-            result = tinypy_eval_source(vm, "local_scope()", 13U, "flags.py", 8U, globals, NULL, &options, &error);
-            assert(result != NULL && error == NULL && tinypy_integer_as_i64(result) == 41);
-            tinypy_release(result);
-        }
-        tinypy_release(code);
-        tinypy_dict_clear(globals);
-        tinypy_release(globals);
         tinypy_vm_destroy(vm);
         assert(state.allocations == 0U && state.bytes == 0U);
     }
@@ -3025,7 +3337,7 @@ static int32_t __test_preprocessor_debug_conditions(void) {
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __test_build_preprocessor(void) {
-    static const char source[] = "if __FEATURE__ and (1 + 1 == 2):\n    result = __VALUE__\nelse:\n    missing_runtime_name\nif __NDEBUG__:\n    ndebug = 1\nelse:\n    ndebug = 0\nif True:\n    literal_true = 1\nif False:\n    dead_runtime_name\nelse:\n    literal_false = 0\nruntime_flag = True\nif __FEATURE__ and runtime_flag:\n    mixed = __VALUE__\nprofile_values = (__TEXT__, __FLOAT__, __TUPLE__, __LONG__)\ndynamic_eval = eval('__VALUE__ + 1')\ndynamic_code = compile('__VALUE__ + 2', '<dynamic>', 'eval')\ndynamic_compile = eval(dynamic_code)\nexec 'dynamic_exec = __VALUE__ + 3'\ntargets = {__VALUE__: 0}\ntargets[__VALUE__] += 1\nfor targets[__VALUE__] in (5,):\n    pass\nif runtime_flag:\n    kept = 1\nelse:\n    if False:\n        dead_else_name\n";
+    static const char source[] = "if __FEATURE__ and (1 + 1 == 2):\n    result = __VALUE__\nelse:\n    missing_runtime_name\nif True:\n    literal_true = 1\nif False:\n    dead_runtime_name\nelse:\n    literal_false = 0\nruntime_flag = True\nif __FEATURE__ and runtime_flag:\n    mixed = __VALUE__\nprofile_values = (__TEXT__, __FLOAT__, __TUPLE__, __LONG__)\ndynamic_eval = eval('__VALUE__ + 1')\ndynamic_code = compile('__VALUE__ + 2', '<dynamic>', 'eval')\ndynamic_compile = eval(dynamic_code)\nexec 'dynamic_exec = __VALUE__ + 3'\ntargets = {__VALUE__: 0}\ntargets[__VALUE__] += 1\nfor targets[__VALUE__] in (5,):\n    pass\nif runtime_flag:\n    kept = 1\nelse:\n    if False:\n        dead_else_name\n";
     static const char missing_source[] = "value = __MISSING__\n";
     static const char dropped_else_source[] = "def g(flag):\n    x = 1\n    if flag:\n        x = 2\n    else:\n        if False:\n            dead\n    return x\n";
     static const char rebound_source[] = "if False:\n    __FEATURE__ = False\n";
@@ -3106,15 +3418,15 @@ static int32_t __test_build_preprocessor(void) {
     constants[5].name = "__LONG__";
     constants[5].name_size = 8U;
     constants[5].value = values[5];
-    assert(tinypy_build_profile_create(&allocator, 0, constants, 6U, NULL, &profile, &profile_error) == TINYPY_BUILD_PROFILE_OK); {
+    assert(tinypy_build_profile_create(&allocator, constants, 6U, NULL, &profile, &profile_error) == TINYPY_BUILD_PROFILE_OK); {
         size_t index;
 
         for (index = 0U; index < 6U; index += 1U) {
             reordered[index] = constants[5U - index];
         }
     }
-    assert(tinypy_build_profile_create(&allocator, 0, reordered, 6U, NULL, &reordered_profile, &profile_error) == TINYPY_BUILD_PROFILE_OK);
-    assert(tinypy_build_profile_constant_count(profile) == 7U);
+    assert(tinypy_build_profile_create(&allocator, reordered, 6U, NULL, &reordered_profile, &profile_error) == TINYPY_BUILD_PROFILE_OK);
+    assert(tinypy_build_profile_constant_count(profile) == 6U);
     assert(memcmp(tinypy_build_profile_digest(profile), tinypy_build_profile_digest(reordered_profile), TINYPY_BUILD_PROFILE_DIGEST_SIZE) == 0);
     tinypy_build_profile_destroy(reordered_profile);
     reordered_profile = NULL;
@@ -3124,14 +3436,14 @@ static int32_t __test_build_preprocessor(void) {
     options.feature_flags = (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR;
     /* The preprocessor without a build profile defines no constants. */
     result = tinypy_compile_source(vm, missing_source, sizeof(missing_source) - 1U, "missing.py", 10U, &options, &error);
-    assert(result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_PREPROCESSOR);
-    tinypy_error_release(error);
-    error = NULL;
+    assert(result != NULL && error == NULL);
+    assert(tinypy_tuple_size(tinypy_code_names(result)) == 2U);
+    tinypy_release(result);
     options.build_profile = profile;
     result = tinypy_compile_source(vm, missing_source, sizeof(missing_source) - 1U, "missing.py", 10U, &options, &error);
-    assert(result == NULL && error != NULL && tinypy_error_kind(error) == TINYPY_ERROR_PREPROCESSOR);
-    tinypy_error_release(error);
-    error = NULL;
+    assert(result != NULL && error == NULL);
+    assert(tinypy_tuple_size(tinypy_code_names(result)) == 2U);
+    tinypy_release(result);
     result = tinypy_compile_source(vm, dropped_else_source, sizeof(dropped_else_source) - 1U, "dropped.py", 10U, &options, &error);
     assert(result != NULL && error == NULL); {
         /* An eliminated else clause disappears instead of adding a pass at
@@ -3171,7 +3483,6 @@ static int32_t __test_build_preprocessor(void) {
     }
     tinypy_release(result);
     assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "result", 6U)) == 42);
-    assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "ndebug", 6U)) == 0);
     assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "literal_true", 12U)) == 1);
     assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "literal_false", 13U)) == 0);
     assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "mixed", 5U)) == 42); {
@@ -3855,7 +4166,7 @@ static int32_t __test_compile_environment_imports(void) {
     constant.name = "__IMPORT_VALUE__";
     constant.name_size = 16U;
     constant.value = build_value;
-    assert(tinypy_build_profile_create(&allocator, 0, &constant, 1U, NULL, &profile, NULL) == TINYPY_BUILD_PROFILE_OK);
+    assert(tinypy_build_profile_create(&allocator, &constant, 1U, NULL, &profile, NULL) == TINYPY_BUILD_PROFILE_OK);
     (void)memset(&host, 0, sizeof(host));
     host.artifact.abi_version = TINYPY_ABI_VERSION;
     host.artifact.struct_size = (uint32_t)sizeof(host.artifact);
@@ -4046,10 +4357,19 @@ int main(void) {
     if (__test_build_preprocessor() != 0) {
         return EXIT_FAILURE;
     }
-    if (__test_debug_flag_profiles() != 0) {
+    if (__test_constant_profiles() != 0) {
         return EXIT_FAILURE;
     }
-    if (__test_preprocessor_debug_flags() != 0) {
+    if (__test_constant_definitions() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_constant_definition_codecs() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_preprocessor_constant_semantics() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (__test_preprocessor_constant_observations() != 0) {
         return EXIT_FAILURE;
     }
     if (__test_preprocessor_debug_conditions() != 0) {

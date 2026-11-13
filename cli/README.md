@@ -23,6 +23,33 @@ The same build produces `build/cli/cli/tinypy_compile` for source-to-marshal
 differential tests; it compiles each file as the string `compile()` reads,
 like the reference script.
 
+## Compile-time definitions
+
+The marshal compiler takes five positional arguments and optional definitions:
+
+```sh
+build/cli/cli/tinypy_compile -D_DEVELOPMENT=False -DAPI_VERSION=3 \
+    "-DCHANNEL='stable'" input.py output.marshal logical_filename.py exec 1
+```
+
+The last two arguments select `exec|eval|single` and optimize `0|1|2`.
+`-D NAME=literal` also works. Definition values are independent of optimization.
+Use Python 2.7 literals: `None`, `True`, `False`, numbers (including `L` longs),
+quoted byte/Unicode strings, and nested tuples. The shell must preserve the
+literal quotes. Arbitrary expressions and duplicate definitions are rejected.
+
+Every matching bare-name read is replaced by the supplied typed constant;
+attributes and strings are unaffected. Names are any Python identifiers and
+match lexically in every scope, so a supplied name cannot be bound anywhere
+(a `-Dself=...` rejects every method), shadows a builtin of the same spelling,
+and a misspelled reference stays a runtime name (SPEC §10).
+Definitions enable the preprocessing stage, which also replaces `__debug__` and
+resolves decidable `if` statements in the whole file; without definitions the
+differential compiler keeps its ordinary Python behavior. Failed
+argument/definition validation names the failed definition and leaves existing
+output intact. Only the builtin `__debug__` depends on optimize level; no
+`_DEVELOPMENT` or `__NDEBUG__` definition is added automatically.
+
 ## Host behaviour
 
 The CLI runs a program the way `python2.7` does:

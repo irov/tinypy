@@ -9718,17 +9718,17 @@ static int32_t __test_build_profile_allocation_refusal(void) {
     constant.value.data_size = sizeof(text);
     (void)memset(&state, 0, sizeof(state));
     tinypy_allocator_t allocator = __test_make_allocator(&state);
-    TEST_CHECK(tinypy_build_profile_create(&allocator, 0, &constant, 1U, NULL, &profile, &profile_error) == TINYPY_BUILD_PROFILE_OK);
+    TEST_CHECK(tinypy_build_profile_create(&allocator, &constant, 1U, NULL, &profile, &profile_error) == TINYPY_BUILD_PROFILE_OK);
     size_t request_count = state.allocation_calls;
     tinypy_build_profile_destroy(profile);
     for (size_t index = 1U; index <= request_count; ++index) {
         state.fail_allocation_call = state.allocation_calls + index;
-        tinypy_build_profile_result_e result = tinypy_build_profile_create(&allocator, 0, &constant, 1U, NULL, &profile, &profile_error);
+        tinypy_build_profile_result_e result = tinypy_build_profile_create(&allocator, &constant, 1U, NULL, &profile, &profile_error);
         state.fail_allocation_call = 0U;
         TEST_CHECK(result == TINYPY_BUILD_PROFILE_LIMIT_EXCEEDED && profile == NULL && profile_error.code == TINYPY_BUILD_PROFILE_LIMIT_EXCEEDED);
         TEST_CHECK(state.outstanding_allocations == 0U);
     }
-    TEST_CHECK(tinypy_build_profile_create(&allocator, 0, &constant, 1U, NULL, &profile, &profile_error) == TINYPY_BUILD_PROFILE_OK);
+    TEST_CHECK(tinypy_build_profile_create(&allocator, &constant, 1U, NULL, &profile, &profile_error) == TINYPY_BUILD_PROFILE_OK);
     tinypy_vm_config_t config = __test_make_config(&allocator);
     tinypy_vm_t *vm = tinypy_vm_create(&config);
     TEST_CHECK(vm != NULL);

@@ -101,7 +101,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     options.limits = &limits;
     options.feature_flags = (uint32_t)((selector / 3U) % 4U);
     if ((options.feature_flags & (uint32_t)TINYPY_COMPILE_FEATURE_PREPROCESSOR) != 0U) {
-        assert(tinypy_build_profile_create(&allocator, 0, NULL, 0U, NULL, &profile, NULL) == TINYPY_BUILD_PROFILE_OK);
+        assert(tinypy_build_profile_create(&allocator, NULL, 0U, NULL, &profile, NULL) == TINYPY_BUILD_PROFILE_OK);
         options.build_profile = profile;
     }
     if ((selector & UINT8_C(0x80)) != 0U) {

@@ -72,9 +72,9 @@ typedef struct tinypy_compile_ctx_t {
     size_t generated_ast_nodes;
     size_t source_map_entries;
     uint32_t preprocessor_future_flags;
-    /* Reset for each if test; only bare-name loads set this marker. */
-    tinypy_bool_t preprocessor_debug_flag_seen;
     tinypy_bool_t source_is_unicode;
+    /* Host definitions decode literals without calling VM codecs. */
+    tinypy_bool_t literal_definition;
     tinypy_bool_t source_encoding_declared;
     tinypy_bool_t source_default_latin1;
     /* The source is file text: the tokenizer reads it line by line like
@@ -137,6 +137,11 @@ void tinypy_internal_compiler_decode_error(tinypy_compile_ctx_t *ctx, tinypy_val
 tinypy_bool_t tinypy_internal_compiler_syntax_warning(tinypy_compile_ctx_t *ctx, const char *message, int32_t line_number);
 tinypy_bool_t tinypy_internal_compiler_tab_warning(tinypy_compile_ctx_t *ctx);
 tinypy_value_t *tinypy_internal_compiler_compile(tinypy_compile_ctx_t *ctx, tinypy_error_t **out_error);
+/* Creates the one-constant profile of name and the Python 2.7 literal that
+   the compiler of vm parses from the C string source in an arena of its
+   own. */
+tinypy_build_profile_result_e tinypy_internal_compiler_definition_parse(tinypy_vm_t *vm, const tinypy_allocator_t *allocator, const char *name, size_t name_size, const char *source, const tinypy_build_profile_limits_t *limits, tinypy_build_profile_t **out_profile, tinypy_build_profile_error_t *out_error);
+tinypy_build_profile_result_e tinypy_internal_build_profile_fail(tinypy_build_profile_error_t *error, tinypy_build_profile_result_e code, size_t constant_index, const char *message);
 tinypy_value_t *tinypy_internal_compiler_parse_number(tinypy_compile_ctx_t *ctx, const char *text, int32_t line_number, int32_t column_offset);
 tinypy_bool_t tinypy_internal_compiler_decimal_double(tinypy_compile_ctx_t *ctx, const char *text, size_t size, double *out_value, int32_t line_number, int32_t column_offset);
 tinypy_bool_t tinypy_internal_compiler_unicode_name(const char *name, size_t name_size, uint32_t *out_code_point);

@@ -115,6 +115,11 @@ static void __tinypy_compiler_escape_errors_release(tinypy_compiler_escape_error
    source decodes to, at most two bytes per byte, and the decoding goes on
    at the position it returns. A failure releases the errors. */
 static TINYPY_NOINLINE tinypy_bool_t __tinypy_compiler_call_escape_handler(tinypy_compile_ctx_t *ctx, tinypy_compiler_escape_errors_t *errors, size_t start, size_t end, const char *reason, uint8_t **io_output, size_t *io_capacity, size_t *io_output_size, size_t *io_position) {
+    if (ctx->literal_definition != 0) {
+        __tinypy_compiler_escape_errors_release(errors);
+        __tinypy_compiler_literal_error(ctx, reason, errors->line_number, 0);
+        return TINYPY_FALSE;
+    }
     tinypy_vm_t *vm = ctx->vm;
     tinypy_error_t *error = NULL;
 
@@ -200,6 +205,10 @@ static TINYPY_ALWAYS_INLINE tinypy_bool_t __tinypy_compiler_unicode_escape_error
    code point of the result, a replacement of the handler included; the
    prepared bytes keep room for six per byte of the rest of the source. */
 static TINYPY_NOINLINE uint8_t *__tinypy_compiler_unicode_escape_run(tinypy_compile_ctx_t *ctx, const uint8_t *run, size_t run_size, size_t rest, uint8_t *prepared, size_t *io_capacity, size_t *io_size, int32_t line_number) {
+    if (ctx->literal_definition != 0) {
+        __tinypy_compiler_literal_error(ctx, "invalid UTF-8 in Unicode literal", line_number, 0);
+        return NULL;
+    }
     tinypy_value_t *input = tinypy_string_from_bytes(ctx->vm, run, run_size);
     tinypy_value_t *encoding = TINYPY_RET(ctx->vm->internal_codec_utf8_name);
     tinypy_error_t *decode_error = NULL;
@@ -544,6 +553,10 @@ static TINYPY_NOINLINE tinypy_bool_t __tinypy_compiler_ascii_literal(tinypy_comp
     if (start == size) {
         return TINYPY_TRUE;
     }
+    if (ctx->literal_definition != 0) {
+        __tinypy_compiler_literal_error(ctx, "non-ASCII byte literal requires decoding", line_number, 0);
+        return TINYPY_FALSE;
+    }
     size_t end = start;
     if (raw != 0 || memchr(content, '\\', size) == NULL) {
         start = 0U;
@@ -867,6 +880,11 @@ static tinypy_value_t *__tinypy_compiler_concat_unicode(tinypy_compile_ctx_t *ct
     }
     if (tinypy_internal_ascii_prefix(TINYPY_TEXT_BYTES(operand), TINYPY_TEXT_BYTE_SIZE(operand)) == TINYPY_TEXT_BYTE_SIZE(operand)) {
         return operand;
+    }
+    if (ctx->literal_definition != 0) {
+        TINYPY_DECREF(operand);
+        __tinypy_compiler_literal_error(ctx, "non-ASCII byte literal cannot concatenate with Unicode", line_number, 0);
+        return NULL;
     }
     tinypy_value_t *decoded = tinypy_internal_text_to_unicode(ctx->vm, operand, &decode_error);
 
