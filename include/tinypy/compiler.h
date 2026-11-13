@@ -3,8 +3,8 @@
 
 #include "tinypy/vm.h"
 
-#define TINYPY_COMPILER_ABI_VERSION UINT32_C(1)
-#define TINYPY_PREPROCESSOR_ABI_VERSION UINT32_C(4)
+#define TINYPY_COMPILER_ABI_VERSION UINT32_C(2)
+#define TINYPY_PREPROCESSOR_ABI_VERSION UINT32_C(5)
 #define TINYPY_META_ABI_VERSION UINT32_C(2)
 #define TINYPY_BUILD_PROFILE_DIGEST_SIZE ((size_t)32U)
 
@@ -106,13 +106,12 @@ typedef enum tinypy_build_value_type_e {
     TINYPY_BUILD_VALUE_LONG = 4,
     TINYPY_BUILD_VALUE_FLOAT = 5,
     TINYPY_BUILD_VALUE_STRING = 6,
-    TINYPY_BUILD_VALUE_UNICODE = 7,
-    TINYPY_BUILD_VALUE_TUPLE = 8
+    TINYPY_BUILD_VALUE_UNICODE = 7
 } tinypy_build_value_type_e;
 
-/* One flat, ABI-extensible descriptor is used recursively for tuple items.
- * Only fields belonging to type are read. Buffer and item inputs are borrowed
- * for create(); the resulting profile owns deep copies. */
+/* One flat, ABI-extensible descriptor holds a scalar constant.
+ * Only fields belonging to type are read. Buffer inputs are borrowed for
+ * create(); the resulting profile owns deep copies. Containers are unsupported. */
 typedef struct tinypy_build_value_t {
     uint32_t abi_version;
     uint32_t struct_size;
@@ -124,9 +123,6 @@ typedef struct tinypy_build_value_t {
 
     const void *data;
     size_t data_size;
-
-    const struct tinypy_build_value_t *items;
-    size_t item_count;
 
     const uint16_t *long_digits;
     size_t long_digit_count;
@@ -147,10 +143,9 @@ typedef struct tinypy_build_profile_limits_t {
     uint32_t struct_size;
     size_t max_allocated_bytes;
     size_t max_constants;
-    size_t max_value_nodes;
+    /* Source nesting limit while parsing NAME=literal definitions. */
     size_t max_depth;
     size_t max_string_bytes;
-    size_t max_tuple_items;
 } tinypy_build_profile_limits_t;
 
 typedef enum tinypy_build_profile_result_e {
@@ -174,7 +169,6 @@ typedef struct tinypy_build_profile_error_t {
     tinypy_build_profile_result_e code;
     uint32_t reserved;
     size_t constant_index;
-    size_t value_depth;
     const char *message;
     size_t message_size;
 } tinypy_build_profile_error_t;
@@ -197,9 +191,10 @@ tinypy_build_profile_result_e tinypy_build_profile_create(const tinypy_allocator
 
 /* Like create, from NAME=literal definitions whose values use Python 2.7
  * literal syntax: None, bool, signed integer/long/float, byte/Unicode
- * strings and nested tuples. The compiler of vm parses each value without
- * executing code, only during the call; the profile belongs to allocator
- * and outlives vm. Literal decoding does not use VM codecs or error handlers:
+ * strings. Container literals, including tuples, are rejected. The compiler
+ * of vm parses each value without executing code, only during the call;
+ * the profile belongs to allocator and outlives vm. Literal decoding does not
+ * use VM codecs or error handlers:
  * invalid Unicode escapes/UTF-8 and concatenation of non-ASCII byte literals
  * with Unicode fail as invalid definitions. Whitespace before a value is
  * ignored. A missing '=' or unsupported literal fails with

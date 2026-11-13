@@ -405,7 +405,6 @@ static tinypy_value_t *__tinypy_preprocessor_build_value(tinypy_compile_ctx_t *c
     tinypy_value_t * function_result;
     tinypy_value_t *result;
     size_t payload_size = sizeof(tinypy_value_t *);
-    size_t index;
 
     if (__tinypy_preprocessor_value_tick(ctx, 1, 0) == 0) {
         return NULL;
@@ -421,12 +420,6 @@ static tinypy_value_t *__tinypy_preprocessor_build_value(tinypy_compile_ctx_t *c
             return NULL;
         }
         payload_size += value->data_size;
-    }
-    else if (value->type == (uint32_t)TINYPY_BUILD_VALUE_TUPLE) {
-        if (value->item_count > (SIZE_MAX - payload_size) / sizeof(tinypy_value_t *)) {
-            return NULL;
-        }
-        payload_size += value->item_count * sizeof(tinypy_value_t *);
     }
     if (__tinypy_preprocessor_bytes_add(ctx, payload_size, 1, 0) == 0) {
         return NULL;
@@ -453,31 +446,6 @@ static tinypy_value_t *__tinypy_preprocessor_build_value(tinypy_compile_ctx_t *c
     case TINYPY_BUILD_VALUE_UNICODE:
         result = tinypy_internal_unicode_from_utf8_checked(ctx->vm, (const char *)value->data, value->data_size, NULL);
         break;
-    case TINYPY_BUILD_VALUE_TUPLE: {
-        tinypy_value_t **items = NULL;
-
-        if (value->item_count != 0U) {
-            items = (tinypy_value_t **)tinypy_internal_compiler_arena_allocate(ctx, value->item_count * sizeof(*items));
-            if (items == NULL) {
-                return NULL;
-            }
-        }
-        for (index = 0U; index < value->item_count; ++index) {
-            items[index] = __tinypy_preprocessor_build_value(ctx, &value->items[index]);
-            if (items[index] == NULL) {
-                while (index != 0U) {
-                    index -= 1U;
-                    TINYPY_DECREF(items[index]);
-                }
-                return NULL;
-            }
-        }
-        result = tinypy_internal_tuple_from_items_checked(ctx->vm, items, value->item_count, NULL);
-        for (index = 0U; index < value->item_count; ++index) {
-            TINYPY_DECREF(items[index]);
-        }
-        break;
-    }
     default:
         return NULL;
     }

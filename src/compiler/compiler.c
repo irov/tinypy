@@ -365,12 +365,8 @@ static tinypy_bool_t __tinypy_compiler_string_source(const tinypy_compile_option
     return string_source;
 }
 //////////////////////////////////////////////////////////////////////////
-static tinypy_bool_t __tinypy_compiler_definition_value(tinypy_compile_ctx_t *ctx, tinypy_ast_expression_t expression, tinypy_build_value_t *value, size_t depth) {
+static tinypy_bool_t __tinypy_compiler_definition_value(tinypy_compile_ctx_t *ctx, tinypy_ast_expression_t expression, tinypy_build_value_t *value) {
     tinypy_value_t *literal = NULL;
-    if (depth > ctx->limits.max_nesting) {
-        tinypy_internal_compiler_error(ctx, TINYPY_ERROR_COMPILER_LIMIT, "constant tuple nesting limit exceeded", expression->lineno, expression->col_offset + 1, ctx->out_error);
-        return TINYPY_FALSE;
-    }
     if (expression->kind == TINYPY_AST_KIND_NAME) {
         if (TINYPY_NAME_EQ(expression->v.Name.id, ctx->vm->internal_none_key) != 0) {
             tinypy_build_value_init(value, TINYPY_BUILD_VALUE_NONE);
@@ -381,25 +377,6 @@ static tinypy_bool_t __tinypy_compiler_definition_value(tinypy_compile_ctx_t *ct
             value->integer_value = TINYPY_NAME_EQ(expression->v.Name.id, ctx->vm->internal_true_key) != 0;
             return TINYPY_TRUE;
         }
-    }
-    else if (expression->kind == TINYPY_AST_KIND_TUPLE) {
-        size_t count = (size_t)TINYPY_AST_SEQUENCE_LENGTH(expression->v.Tuple.elts);
-        tinypy_build_value_t *items = NULL;
-        if (count != 0U) {
-            items = (tinypy_build_value_t *)tinypy_internal_compiler_arena_allocate(ctx, count * sizeof(*items));
-            if (items == NULL) {
-                return TINYPY_FALSE;
-            }
-        }
-        tinypy_build_value_init(value, TINYPY_BUILD_VALUE_TUPLE);
-        value->items = items;
-        value->item_count = count;
-        for (size_t index = 0U; index < count; ++index) {
-            if (__tinypy_compiler_definition_value(ctx, (tinypy_ast_expression_t)TINYPY_AST_SEQUENCE_GET(expression->v.Tuple.elts, (int32_t)index), &items[index], depth + 1U) == 0) {
-                return TINYPY_FALSE;
-            }
-        }
-        return TINYPY_TRUE;
     }
     else if (expression->kind == TINYPY_AST_KIND_NUM) {
         literal = expression->v.Num.n;
@@ -449,7 +426,7 @@ static tinypy_bool_t __tinypy_compiler_definition_value(tinypy_compile_ctx_t *ct
             break;
         }
     }
-    tinypy_internal_compiler_error(ctx, TINYPY_ERROR_PREPROCESSOR, "definition value must be a supported Python literal", expression->lineno, expression->col_offset + 1, ctx->out_error);
+    tinypy_internal_compiler_error(ctx, TINYPY_ERROR_PREPROCESSOR, "definition value must be a supported scalar literal", expression->lineno, expression->col_offset + 1, ctx->out_error);
     return TINYPY_FALSE;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -494,7 +471,7 @@ tinypy_build_profile_result_e tinypy_internal_compiler_definition_parse(tinypy_v
         tinypy_compiler_flags_t flags;
         tinypy_future_features_t *future;
         tinypy_ast_module_t module = __tinypy_compiler_front_stages(&ctx, &flags, &future, &error);
-        parsed = module != NULL && __tinypy_compiler_definition_value(&ctx, module->v.Expression.body, &constant.value, 0U) != 0;
+        parsed = module != NULL && __tinypy_compiler_definition_value(&ctx, module->v.Expression.body, &constant.value) != 0;
     }
     /* The value views the arena, so the profile copies it first. */
     if (parsed != 0) {

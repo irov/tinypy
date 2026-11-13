@@ -24,7 +24,7 @@ def run(arguments):
     observations = 0
     literals = ['False', 'True', 'None', '0', '-7', '+13', '0.5', '-0.5', ' \tFalse',
                 '123456789012345678901234567890L', "'a=b'", "u'\\u041f\\u0440'",
-                "u'\\ud83d\\ude00\\udc00'", "(False, None, -3, ('text', 17L))"]
+                "u'\\ud83d\\ude00\\udc00'", "(17)"]
     for optimize in [0, 1, 2]:
         plain = compile_source('value = 42\n', [], optimize)
         supplied = compile_source('value = CONTROL\n', ['CONTROL=42'], optimize)
@@ -67,7 +67,8 @@ def run(arguments):
             observations += 1
 
     invalid = [['FLAG'], ['FLAG='], ['2FLAG=True'], ['__debug__=False'],
-               ['FLAG=unknown()'], ['FLAG=1 // 0'], ['FLAG=[1]'], ['FLAG=False', 'FLAG=True']]
+               ['FLAG=unknown()'], ['FLAG=1 // 0'], ['FLAG=[1]'], ['FLAG=False', 'FLAG=True'],
+               ['FLAG=()'], ['FLAG=(1,)'], ['FLAG=1, 2'], ['FLAG=(1, (2, 3))'], ['FLAG=tuple()']]
     source.write_text('value = 42\n', encoding='utf-8')
     for definitions in invalid:
         output.write_bytes(b'preserved output')

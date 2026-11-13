@@ -1180,8 +1180,9 @@ together on success or error.
 ## 10. Build profiles
 
 An immutable build profile maps explicit names to typed compile-time constants.
-Supported values are `None`, bool, integer, long, float, byte string, Unicode,
-and immutable tuples of supported values. There is no implicit profile entry.
+Supported values are exactly `None`, bool, integer, long, float, byte string
+and Unicode. All container values, including empty or nested tuples, are
+rejected. There is no implicit profile entry.
 A profile does not depend on an optimize level: one profile serves compilation
 at optimize `0`, `1`, and `2`.
 
@@ -1269,8 +1270,9 @@ only constant that depends on the optimize level. The preprocessor takes it
 from the compile options, not from the profile: optimize `0` produces `True`,
 optimize `1` and `2` produce `False`. It cannot be supplied by a profile.
 There is no debug-flag value type and no synthesized `__NDEBUG__` constant.
-Preprocessor ABI `4` replaces ABI `3`'s flag-name removal with explicit typed
-constants and removes the optimize level from the profile.
+Compiler ABI `2` removes recursive build-value fields and tuple-specific limits.
+Preprocessor ABI `5` restricts build profiles to scalar constants, retaining
+ABI `4`'s explicit typed definitions independent of the optimize level.
 
 For example, an embedding host can supply `_DEVELOPMENT` for every optimize
 level:
@@ -1299,10 +1301,13 @@ VM is needed only during the call, and the profile outlives it. Literal decoding
 uses no VM codecs or error handlers: invalid Unicode escapes/UTF-8 and
 concatenation of non-ASCII byte literals with Unicode fail as invalid definitions.
 Ordinary source compilation keeps Python's codec and error-handler behavior.
-Values can be `None`, `True`, `False`, signed integers/longs/floats, quoted byte
-or Unicode strings, and nested tuples; whitespace before a value is ignored.
-A definition without `=`, or whose value is a call, lookup, arithmetic, or another
-non-literal expression, fails with `TINYPY_BUILD_PROFILE_INVALID_DEFINITION`.
+Values can be `None`, `True`, `False`, signed integers/longs/floats, and quoted
+byte or Unicode strings; whitespace before a value is ignored. A definition
+without `=`, or whose value is any container (including `()`, `(1,)`, and nested
+tuples), a call, lookup, arithmetic, or another non-scalar expression, fails with
+`TINYPY_BUILD_PROFILE_INVALID_DEFINITION`. Parentheses around a scalar, such as
+`(17)`, still yield that scalar. Ordinary Python container expressions remain
+available in compiled source.
 Duplicate names fail with `TINYPY_BUILD_PROFILE_DUPLICATE_NAME`.
 
 The `tinypy_compile` console compiler accepts repeated `-DNAME=literal` or

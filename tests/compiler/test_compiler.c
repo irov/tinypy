@@ -2793,12 +2793,17 @@ static int32_t __test_constant_profiles(void) {
     assert(memcmp(tinypy_build_profile_digest(profile), tinypy_build_profile_digest(other), TINYPY_BUILD_PROFILE_DIGEST_SIZE) != 0);
     tinypy_build_profile_destroy(profile);
     tinypy_build_profile_destroy(other);
-    tinypy_build_value_init(&constants[0].value, TINYPY_BUILD_VALUE_TUPLE);
-    constants[1].value.type = 9U;
-    constants[0].value.items = &constants[1].value;
-    constants[0].value.item_count = 1U;
-    assert(tinypy_build_profile_create(&allocator, constants, 1U, NULL, &profile, &error) == TINYPY_BUILD_PROFILE_INVALID_VALUE_TYPE);
-    assert(profile == NULL && error.value_depth == 1U);
+    /* Former tuple/debug-flag tags must not bypass the scalar-only API. */
+    for (uint32_t type = 8U; type <= 9U; ++type) {
+        tinypy_build_value_init(&constants[0].value, TINYPY_BUILD_VALUE_BOOL);
+        constants[0].value.type = type;
+        assert(tinypy_build_profile_create(&allocator, constants, 1U, NULL, &profile, &error) == TINYPY_BUILD_PROFILE_INVALID_VALUE_TYPE);
+        assert(profile == NULL && error.constant_index == 0U);
+    }
+    tinypy_build_value_init(&constants[0].value, TINYPY_BUILD_VALUE_BOOL);
+    constants[0].value.abi_version = 1U;
+    assert(tinypy_build_profile_create(&allocator, constants, 1U, NULL, &profile, &error) == TINYPY_BUILD_PROFILE_ABI_MISMATCH);
+    assert(profile == NULL && error.constant_index == 0U);
     assert(state.allocations == 0U && state.bytes == 0U);
     return 0;
 }
@@ -2821,8 +2826,8 @@ static int32_t __test_constant_definitions(void) {
         "_DEVELOPMENT=False", "enabled=True", "nothing=None", "version=42",
         "negative=-13", "positive=+7", "ratio=-0.5", "huge=123456789012345678901234567890L",
         "channel='stable'", "label=u'\\u041f\\u0440\\u0438\\u0432\\u0435\\u0442'",
-        "items=(None, True, False, -5, (u'text', 17L))", "__NDEBUG__=False",
-        "spaced= \t\n(1, 'two')", "surrogates=u'\\ud83d\\ude00\\udc00'"
+        "__NDEBUG__=False",
+        "spaced= \t\n17", "surrogates=u'\\ud83d\\ude00\\udc00'"
     };
     static const struct {
         const char *definition;
@@ -2837,7 +2842,10 @@ static int32_t __test_constant_definitions(void) {
         {"FLAG=not False", TINYPY_BUILD_PROFILE_INVALID_DEFINITION}, {"FLAG=[1, 2]", TINYPY_BUILD_PROFILE_INVALID_DEFINITION},
         {"FLAG={1: 2}", TINYPY_BUILD_PROFILE_INVALID_DEFINITION}, {"FLAG=1j", TINYPY_BUILD_PROFILE_INVALID_DEFINITION},
         {"FLAG='open", TINYPY_BUILD_PROFILE_INVALID_DEFINITION}, {"FLAG= # coding: unknown\nFalse", TINYPY_BUILD_PROFILE_INVALID_DEFINITION},
-        {"FLAG=\357\273\277False", TINYPY_BUILD_PROFILE_INVALID_DEFINITION}
+        {"FLAG=\357\273\277False", TINYPY_BUILD_PROFILE_INVALID_DEFINITION},
+        {"FLAG=()", TINYPY_BUILD_PROFILE_INVALID_DEFINITION}, {"FLAG=(1,)", TINYPY_BUILD_PROFILE_INVALID_DEFINITION},
+        {"FLAG=1, 2", TINYPY_BUILD_PROFILE_INVALID_DEFINITION}, {"FLAG=(1, (2, 3))", TINYPY_BUILD_PROFILE_INVALID_DEFINITION},
+        {"FLAG=tuple()", TINYPY_BUILD_PROFILE_INVALID_DEFINITION}
     };
     static const char *const rebound[] = {
         "_DEVELOPMENT = True\n", "del _DEVELOPMENT\n",
@@ -2845,9 +2853,9 @@ static int32_t __test_constant_definitions(void) {
         "from module import name as _DEVELOPMENT\n"
     };
     static const char source[] =
-        "values = (_DEVELOPMENT, enabled, nothing, version, negative, positive, ratio, huge, channel, label, items, __NDEBUG__)\n"
+        "values = (_DEVELOPMENT, enabled, nothing, version, negative, positive, ratio, huge, channel, label, __NDEBUG__)\n"
         "dynamic = (eval('_DEVELOPMENT'), eval('__NDEBUG__'))\n"
-        "same = spaced == (1, 'two') and surrogates == u'\\ud83d\\ude00\\udc00' and len(surrogates) == len(u'\\ud83d\\ude00\\udc00')\n"
+        "same = spaced == 17 and surrogates == u'\\ud83d\\ude00\\udc00' and len(surrogates) == len(u'\\ud83d\\ude00\\udc00')\n"
         "debug = __debug__\n"
         "unregistered = '__MISSING__'\n";
     test_allocator_state_t profile_state = {0U, 0U};
@@ -2870,7 +2878,6 @@ static int32_t __test_constant_definitions(void) {
     assert(tinypy_build_profile_find(profile, "positive", 8U, &value) != 0 && value->integer_value == 7);
     assert(tinypy_build_profile_find(profile, "ratio", 5U, &value) != 0 && value->type == TINYPY_BUILD_VALUE_FLOAT && value->float_value == -0.5);
     assert(tinypy_build_profile_find(profile, "huge", 4U, &value) != 0 && value->type == TINYPY_BUILD_VALUE_LONG && value->long_digit_count > 1U);
-    assert(tinypy_build_profile_find(profile, "items", 5U, &value) != 0 && value->type == TINYPY_BUILD_VALUE_TUPLE && value->item_count == 5U);
     /* One profile serves every optimize level; only __debug__ follows it. */
     for (int32_t optimize = 0; optimize <= 2; ++optimize) {
         test_allocator_state_t state = {0U, 0U};
@@ -2889,7 +2896,6 @@ static int32_t __test_constant_definitions(void) {
         assert(tinypy_typeof(tinypy_tuple_get(values, 0U)) == TINYPY_VALUE_BOOL && tinypy_bool_as_i32(tinypy_tuple_get(values, 0U)) == 0);
         assert(tinypy_typeof(tinypy_tuple_get(values, 7U)) == TINYPY_VALUE_LONG);
         assert(tinypy_typeof(tinypy_tuple_get(values, 9U)) == TINYPY_VALUE_UNICODE);
-        assert(tinypy_typeof(tinypy_tuple_get(values, 10U)) == TINYPY_VALUE_TUPLE);
         tinypy_value_t *dynamic = __test_dict_get(vm, globals, "dynamic", 7U);
         assert(tinypy_bool_as_i32(tinypy_tuple_get(dynamic, 0U)) == 0);
         assert(tinypy_bool_as_i32(tinypy_tuple_get(dynamic, 1U)) == 0);
@@ -2921,13 +2927,12 @@ static int32_t __test_constant_definitions(void) {
     char nested[512];
     size_t depth = limits.max_depth + 1U;
     size_t offset = (size_t)snprintf(nested, sizeof(nested), "FLAG=");
-    assert(offset + depth * 3U + 2U < sizeof(nested));
+    assert(offset + depth * 2U + 2U < sizeof(nested));
     for (size_t index = 0U; index < depth; ++index) {
         nested[offset++] = '(';
     }
     nested[offset++] = '0';
     for (size_t index = 0U; index < depth; ++index) {
-        nested[offset++] = ',';
         nested[offset++] = ')';
     }
     nested[offset] = '\0';
@@ -3337,16 +3342,15 @@ static int32_t __test_preprocessor_debug_conditions(void) {
 }
 //////////////////////////////////////////////////////////////////////////
 static int32_t __test_build_preprocessor(void) {
-    static const char source[] = "if __FEATURE__ and (1 + 1 == 2):\n    result = __VALUE__\nelse:\n    missing_runtime_name\nif True:\n    literal_true = 1\nif False:\n    dead_runtime_name\nelse:\n    literal_false = 0\nruntime_flag = True\nif __FEATURE__ and runtime_flag:\n    mixed = __VALUE__\nprofile_values = (__TEXT__, __FLOAT__, __TUPLE__, __LONG__)\ndynamic_eval = eval('__VALUE__ + 1')\ndynamic_code = compile('__VALUE__ + 2', '<dynamic>', 'eval')\ndynamic_compile = eval(dynamic_code)\nexec 'dynamic_exec = __VALUE__ + 3'\ntargets = {__VALUE__: 0}\ntargets[__VALUE__] += 1\nfor targets[__VALUE__] in (5,):\n    pass\nif runtime_flag:\n    kept = 1\nelse:\n    if False:\n        dead_else_name\n";
+    static const char source[] = "if __FEATURE__ and (1 + 1 == 2):\n    result = __VALUE__\nelse:\n    missing_runtime_name\nif True:\n    literal_true = 1\nif False:\n    dead_runtime_name\nelse:\n    literal_false = 0\nruntime_flag = True\nif __FEATURE__ and runtime_flag:\n    mixed = __VALUE__\nprofile_values = (__TEXT__, __FLOAT__, __BYTES__, __LONG__)\ndynamic_eval = eval('__VALUE__ + 1')\ndynamic_code = compile('__VALUE__ + 2', '<dynamic>', 'eval')\ndynamic_compile = eval(dynamic_code)\nexec 'dynamic_exec = __VALUE__ + 3'\ntargets = {__VALUE__: 0}\ntargets[__VALUE__] += 1\nfor targets[__VALUE__] in (5,):\n    pass\nif runtime_flag:\n    kept = 1\nelse:\n    if False:\n        dead_else_name\n";
     static const char missing_source[] = "value = __MISSING__\n";
     static const char dropped_else_source[] = "def g(flag):\n    x = 1\n    if flag:\n        x = 2\n    else:\n        if False:\n            dead\n    return x\n";
     static const char rebound_source[] = "if False:\n    __FEATURE__ = False\n";
     static const char unicode_text[] = "profile text";
-    static const char tuple_text[] = "tuple item";
+    static const char bytes_text[] = "byte value";
     static const uint16_t long_digits[] = {UINT16_C(7232), UINT16_C(1)};
     test_allocator_state_t state = {0U, 0U};
     tinypy_allocator_t allocator;
-    tinypy_build_value_t tuple_items[2];
     tinypy_build_value_t values[6];
     tinypy_build_constant_t constants[6];
     tinypy_build_constant_t reordered[6];
@@ -3376,13 +3380,9 @@ static int32_t __test_build_preprocessor(void) {
     values[2].data_size = sizeof(unicode_text) - 1U;
     tinypy_build_value_init(&values[3], TINYPY_BUILD_VALUE_FLOAT);
     values[3].float_value = 0.5;
-    tinypy_build_value_init(&tuple_items[0], TINYPY_BUILD_VALUE_NONE);
-    tinypy_build_value_init(&tuple_items[1], TINYPY_BUILD_VALUE_STRING);
-    tuple_items[1].data = tuple_text;
-    tuple_items[1].data_size = sizeof(tuple_text) - 1U;
-    tinypy_build_value_init(&values[4], TINYPY_BUILD_VALUE_TUPLE);
-    values[4].items = tuple_items;
-    values[4].item_count = 2U;
+    tinypy_build_value_init(&values[4], TINYPY_BUILD_VALUE_STRING);
+    values[4].data = bytes_text;
+    values[4].data_size = sizeof(bytes_text) - 1U;
     tinypy_build_value_init(&values[5], TINYPY_BUILD_VALUE_LONG);
     values[5].long_digits = long_digits;
     values[5].long_digit_count = 2U;
@@ -3410,7 +3410,7 @@ static int32_t __test_build_preprocessor(void) {
     constants[3].value = values[3];
     constants[4].abi_version = TINYPY_COMPILER_ABI_VERSION;
     constants[4].struct_size = (uint32_t)sizeof(constants[4]);
-    constants[4].name = "__TUPLE__";
+    constants[4].name = "__BYTES__";
     constants[4].name_size = 9U;
     constants[4].value = values[4];
     constants[5].abi_version = TINYPY_COMPILER_ABI_VERSION;
@@ -3487,7 +3487,6 @@ static int32_t __test_build_preprocessor(void) {
     assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "literal_false", 13U)) == 0);
     assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "mixed", 5U)) == 42); {
         tinypy_value_t *profile_values = __test_dict_get(vm, globals, "profile_values", 14U);
-        tinypy_value_t *profile_tuple;
         size_t text_size;
         size_t code_points;
         const char *text;
@@ -3497,10 +3496,10 @@ static int32_t __test_build_preprocessor(void) {
         text = tinypy_unicode_utf8_view(item, &text_size, &code_points);
         assert(text_size == sizeof(unicode_text) - 1U && memcmp(text, unicode_text, text_size) == 0);
         assert(tinypy_float_as_double(tinypy_tuple_get(profile_values, 1U)) == 0.5);
-        profile_tuple = tinypy_tuple_get(profile_values, 2U);
-        assert(tinypy_typeof(profile_tuple) == TINYPY_VALUE_TUPLE && tinypy_tuple_size(profile_tuple) == 2U);
-        assert(tinypy_typeof(tinypy_tuple_get(profile_tuple, 0U)) == TINYPY_VALUE_NONE);
-        assert(tinypy_typeof(tinypy_tuple_get(profile_tuple, 1U)) == TINYPY_VALUE_STRING);
+        item = tinypy_tuple_get(profile_values, 2U);
+        assert(tinypy_typeof(item) == TINYPY_VALUE_STRING);
+        text = tinypy_string_view(item, &text_size);
+        assert(text_size == sizeof(bytes_text) - 1U && memcmp(text, bytes_text, text_size) == 0);
         assert(tinypy_typeof(tinypy_tuple_get(profile_values, 3U)) == TINYPY_VALUE_LONG && tinypy_long_as_i64(tinypy_tuple_get(profile_values, 3U)) == 40000);
     }
     assert(tinypy_integer_as_i64(__test_dict_get(vm, globals, "dynamic_eval", 12U)) == 43);

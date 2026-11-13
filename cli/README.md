@@ -35,8 +35,9 @@ build/cli/cli/tinypy_compile -D_DEVELOPMENT=False -DAPI_VERSION=3 \
 The last two arguments select `exec|eval|single` and optimize `0|1|2`.
 `-D NAME=literal` also works. Definition values are independent of optimization.
 Use Python 2.7 literals: `None`, `True`, `False`, numbers (including `L` longs),
-quoted byte/Unicode strings, and nested tuples. The shell must preserve the
-literal quotes. Arbitrary expressions and duplicate definitions are rejected.
+and quoted byte/Unicode strings. The shell must preserve the literal quotes.
+All container literals (including empty or nested tuples), arbitrary expressions
+and duplicate definitions are rejected.
 
 Every matching bare-name read is replaced by the supplied typed constant;
 attributes and strings are unaffected. Names are any Python identifiers and
