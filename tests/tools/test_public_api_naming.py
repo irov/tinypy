@@ -22,6 +22,7 @@ INTERNAL_CORE_UNITS = {
     "cycle_diagnostics",
     "dictproxy",
     "double_conversion",
+    "functional_iterator",
     "functools",
     "intern",
     "pool",

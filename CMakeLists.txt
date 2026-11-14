@@ -98,6 +98,7 @@ add_library(tinypy STATIC
     src/core/exception.c
     src/core/frame.c
     src/core/debugger.c
+    src/core/functional_iterator.c
     src/core/functools.c
     src/core/function.c
     src/core/generator.c
@@ -298,6 +299,7 @@ if(BUILD_TESTING)
     add_test(NAME runtime_computed_allocation_refusal COMMAND tinypy_core_tests computed_allocation_refusal)
     add_test(NAME runtime_sre_allocation_refusal COMMAND tinypy_core_tests sre_allocation_refusal)
     add_test(NAME runtime_sre_interrupt COMMAND tinypy_core_tests sre_interrupt)
+    add_test(NAME runtime_functional_iterators COMMAND tinypy_core_tests functional_iterators)
     add_test(NAME runtime_computed_result_refusal COMMAND tinypy_core_tests computed_result_refusal)
     add_test(NAME core_allocation_refusal COMMAND tinypy_core_tests allocation_refusal)
     add_test(NAME core_build_profile_allocation_refusal COMMAND tinypy_core_tests build_profile_allocation_refusal)

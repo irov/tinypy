@@ -928,6 +928,12 @@ typedef struct tinypy_intern_entry_t {
     X(internal_writelines_key, "writelines", 1) \
     X(internal_xmlcharrefreplace_key, "xmlcharrefreplace", 1) \
     X(internal_xrange_key, "xrange", 1) \
+    X(internal_xzip_key, "xzip", 1) \
+    X(internal_xmap_key, "xmap", 1) \
+    X(internal_xfilter_key, "xfilter", 1) \
+    X(internal_xchain_key, "xchain", 1) \
+    X(internal_xslice_key, "xslice", 1) \
+    X(internal_from_iterable_key, "from_iterable", 1) \
     X(internal_zip_key, "zip", 1) \
     X(internal_exec_mode_key, "exec", 1) \
     X(internal_single_mode_key, "single", 1) \
@@ -3300,6 +3306,8 @@ tinypy_value_t *tinypy_internal_function_create(tinypy_type_t *type, tinypy_valu
 void tinypy_internal_initialize_function_type(tinypy_vm_t *vm);
 tinypy_value_t *tinypy_internal_eval_function(tinypy_value_t *function, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_eval_function_items(tinypy_value_t *function, tinypy_value_t *const *items, size_t item_count, tinypy_value_t *kwargs, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_call_items(tinypy_value_t *callable, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error);
+tinypy_value_t *tinypy_internal_object_call_items(tinypy_value_t *callable, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_eval_generator_resume(tinypy_generator_object_t *generator, tinypy_value_t *send_value, tinypy_value_t *throw_type, tinypy_value_t *throw_value, tinypy_value_t *throw_traceback, tinypy_bool_t *out_yielded, tinypy_error_t **out_error);
 void tinypy_internal_iterator_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 tinypy_value_t *tinypy_internal_iterator_iter(tinypy_value_t *value, tinypy_error_t **out_error);
@@ -3530,6 +3538,7 @@ tinypy_value_t *tinypy_internal_reversed_next(tinypy_value_t *value, tinypy_erro
 void tinypy_internal_enumerate_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 void tinypy_internal_reversed_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 void tinypy_internal_initialize_iterator_types(tinypy_vm_t *vm);
+void tinypy_internal_initialize_functional_iterators(tinypy_vm_t *vm);
 void tinypy_internal_buffer_release_references(tinypy_value_t *value, tinypy_release_callback_t visit, void *user_data);
 tinypy_value_t *tinypy_internal_buffer_create(tinypy_type_t *type, tinypy_value_t *args, tinypy_value_t *kwargs, tinypy_error_t **out_error);
 tinypy_value_t *tinypy_internal_buffer_get_item(tinypy_value_t *value, tinypy_value_t *key, tinypy_error_t **out_error);

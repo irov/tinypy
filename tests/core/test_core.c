@@ -9492,6 +9492,132 @@ static int32_t __test_sre_allocation_refusal(void) {
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////
+typedef struct test_functional_iterator_interrupt_t {
+    size_t polls;
+    size_t stop_after;
+    tinypy_value_t *drain;
+} test_functional_iterator_interrupt_t;
+//////////////////////////////////////////////////////////////////////////
+static tinypy_bool_t __test_functional_iterator_poll_interrupt(void *user_data) {
+    test_functional_iterator_interrupt_t *state = (test_functional_iterator_interrupt_t *)user_data;
+
+    if (state->drain != NULL) {
+        tinypy_value_t *iterator = state->drain;
+
+        state->drain = NULL;
+        for (;;) {
+            tinypy_value_t *item = tinypy_next(iterator, NULL);
+            if (item == NULL) {
+                break;
+            }
+            tinypy_release(item);
+        }
+    }
+    if (state->stop_after == 0U) {
+        return TINYPY_FALSE;
+    }
+    state->polls += 1U;
+    return state->polls >= state->stop_after ? TINYPY_TRUE : TINYPY_FALSE;
+}
+//////////////////////////////////////////////////////////////////////////
+static int32_t __test_functional_iterators(void) {
+    static const char setup[] =
+        "import __builtin__\n"
+        "for factory in (xzip, xmap, xfilter, xchain, xslice):\n"
+        "    assert factory.__module__ == '__builtin__'\n"
+        "assert not hasattr(__builtin__, 'irange')\n"
+        "assert not hasattr(__builtin__, 'izip')\n"
+        "assert not hasattr(__builtin__, 'imap')\n"
+        "assert not hasattr(__builtin__, 'ifilter')\n"
+        "inputs = [xrange(1000000000)] * 256\n"
+        "zipper = xzip(*inputs)\n"
+        "mapper = xmap(min, *inputs)\n"
+        "filtered = xfilter(None, [0] * 10000)\n"
+        "chained = xchain(*([()] * 10000))\n"
+        "sliced = xslice(xrange(1000000000), 1000000, None)\n"
+        "reentrant_chain = xchain([1], [2, 3])\n"
+        "for factory in (map, xmap):\n"
+        "    captured = list(factory(hold_args, xrange(3)))\n"
+        "    assert captured == [(0,), (1,), (2,)]\n"
+        "    assert captured[0] is not captured[1]\n"
+        "    assert hold_args(42) == (42,)\n"
+        "    assert captured == [(0,), (1,), (2,)]\n";
+    test_allocator_state_t allocator_state = {0};
+    test_functional_iterator_interrupt_t poll_state = {0};
+    tinypy_allocator_t allocator = __test_make_allocator(&allocator_state);
+    tinypy_vm_config_t config = __test_make_config(&allocator);
+    tinypy_host_t host = {0};
+
+    host.abi_version = TINYPY_ABI_VERSION;
+    host.struct_size = (uint32_t)sizeof(host);
+    host.user_data = &poll_state;
+    host.poll_interrupt = __test_functional_iterator_poll_interrupt;
+    config.host = &host;
+    tinypy_vm_t *vm = tinypy_vm_create(&config);
+    TEST_CHECK(vm != NULL);
+    tinypy_value_t *globals = tinypy_dict_new(vm);
+    tinypy_value_t *key = tinypy_string_from_bytes(vm, "hold_args", sizeof("hold_args") - 1U);
+    tinypy_value_t *callback = tinypy_native_function_new_key(key, __test_native_return_args, NULL, NULL);
+
+    tinypy_dict_set(globals, key, callback);
+    tinypy_release(callback);
+    tinypy_release(key);
+    tinypy_compile_options_t options;
+
+    tinypy_compile_options_init(&options, TINYPY_COMPILE_EXEC);
+    tinypy_error_t *error = NULL;
+    tinypy_value_t *result = tinypy_exec_source(vm, setup, sizeof(setup) - 1U, "lazy.py", 7U, globals, NULL, &options, &error);
+    TEST_CHECK(result != NULL && error == NULL);
+    tinypy_release(result);
+
+    static const char *const names[] = {"zipper", "mapper"};
+    for (size_t index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
+        tinypy_value_t *iterator = __test_global(globals, names[index]);
+        TEST_CHECK(iterator != NULL);
+        tinypy_internal_pool_trim(vm);
+        vm->max_heap_bytes = vm->allocated_bytes;
+        result = tinypy_next(iterator, &error);
+        vm->max_heap_bytes = 0U;
+        TEST_CHECK(result == NULL && error != NULL);
+        TEST_CHECK(tinypy_error_kind(error) == TINYPY_ERROR_MEMORY);
+        tinypy_error_release(error);
+        error = NULL;
+        tinypy_vm_clear_error(vm);
+        result = tinypy_next(iterator, &error);
+        TEST_CHECK(result != NULL && error == NULL);
+        tinypy_value_t *first = index == 0U ? tinypy_tuple_get(result, 0U) : result;
+        TEST_CHECK(tinypy_integer_as_i64(first) == 0);
+        tinypy_release(result);
+    }
+
+    static const char *const interrupt_names[] = {"filtered", "chained", "sliced"};
+    for (size_t index = 0U; index < sizeof(interrupt_names) / sizeof(interrupt_names[0]); ++index) {
+        tinypy_value_t *iterator = __test_global(globals, interrupt_names[index]);
+        TEST_CHECK(iterator != NULL);
+        poll_state.polls = 0U;
+        poll_state.stop_after = 4U;
+        result = tinypy_next(iterator, &error);
+        poll_state.stop_after = 0U;
+        TEST_CHECK(result == NULL && error != NULL);
+        TEST_CHECK(tinypy_error_kind(error) == TINYPY_ERROR_INTERRUPT);
+        TEST_CHECK(poll_state.polls == 4U);
+        tinypy_error_release(error);
+        error = NULL;
+        tinypy_vm_clear_error(vm);
+    }
+    tinypy_value_t *reentrant = __test_global(globals, "reentrant_chain");
+    TEST_CHECK(reentrant != NULL);
+    poll_state.drain = reentrant;
+    result = tinypy_next(reentrant, &error);
+    TEST_CHECK(result == NULL && error == NULL);
+    tinypy_dict_clear(globals);
+    tinypy_release(globals);
+    tinypy_vm_destroy(vm);
+    TEST_CHECK(allocator_state.outstanding_allocations == 0U);
+    TEST_CHECK(allocator_state.outstanding_bytes == 0U);
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////
 typedef struct test_sre_interrupt_state_t {
     size_t polls;
     size_t stop_after;
@@ -12219,6 +12345,10 @@ int main(int argc, char **argv) {
     }
     if (strcmp(argv[1], "sre_interrupt") == 0) {
         int result = __test_sre_interrupt();
+        return result;
+    }
+    if (strcmp(argv[1], "functional_iterators") == 0) {
+        int result = __test_functional_iterators();
         return result;
     }
     if (strcmp(argv[1], "text_heap_budget") == 0) {

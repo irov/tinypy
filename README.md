@@ -31,6 +31,23 @@ The current implementation provides:
 - a memory-only CPython 2.7 marshal-v2 reader and writer;
 - an artifact container with ABI/profile metadata and SHA-256 integrity.
 
+The builtins `xzip(*iterables)`, `xmap(function, *iterables)` and
+`xfilter(predicate, iterable)` return single-pass iterators. They acquire input
+iterators at construction and process values on demand without collecting the
+result in a list. They follow Python 2.7 `itertools.izip`, `imap` and `ifilter`
+semantics: `xzip` and `xmap` stop at the shortest input, `xmap(None, ...)` yields
+argument tuples, and `xfilter(None, ...)` keeps truthy values. Callbacks and
+iteration errors occur during consumption; changes to inputs remain visible.
+Use `list(...)` to collect a result, and the existing `xrange` for lazy numeric
+ranges. `range`, `zip`, `map` and `filter` keep their Python 2.7 behavior.
+
+`xchain(*iterables)` walks inputs consecutively and opens each input only when
+reached. `xchain.from_iterable(iterables)` also reads the sequence of inputs on
+demand. `xslice(iterable, stop)` and `xslice(iterable, start, stop[, step])`
+select positions without collecting the input. Bounds follow Python 2.7
+`itertools.islice`: nonnegative positions, a positive step, and `None` defaults.
+For example, `list(xslice(xchain(xrange(1000000000), [1]), 3))` is `[0, 1, 2]`.
+
 tinypy deliberately has no cyclic collector. Embedders must release owned
 values and break owning cycles before destroying a VM.
 

@@ -1984,6 +1984,7 @@ tinypy_vm_t *tinypy_vm_create(const tinypy_vm_config_t *config) {
     __tinypy_internal_initialize_builtins(vm);
     tinypy_internal_initialize_exceptions(vm);
     tinypy_internal_initialize_builtin_functions(vm);
+    tinypy_internal_initialize_functional_iterators(vm);
     tinypy_dict_set(vm->builtins, vm->internal_xrange_key, &vm->types[TINYPY_VALUE_XRANGE].base.base);
     tinypy_dict_set(vm->builtins, vm->internal_enumerate_key, &vm->types[TINYPY_VALUE_ENUMERATE].base.base);
     tinypy_dict_set(vm->builtins, vm->internal_reversed_key, &vm->types[TINYPY_VALUE_REVERSED].base.base);

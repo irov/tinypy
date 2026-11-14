@@ -534,25 +534,6 @@ typedef struct tinypy_list_sort_state_t {
 } tinypy_list_sort_state_t;
 //////////////////////////////////////////////////////////////////////////
 static tinypy_value_t *__tinypy_container_call_items(tinypy_vm_t *vm, tinypy_value_t *callable, tinypy_value_t *const *items, size_t item_count, tinypy_error_t **out_error) {
-    if (callable->type == &vm->types[TINYPY_VALUE_FUNCTION]) {
-        tinypy_value_t *return_value_1 = tinypy_internal_eval_function_items(callable, items, item_count, NULL, out_error);
-        return return_value_1;
-    }
-    if (callable->type == &vm->types[TINYPY_VALUE_METHOD]) {
-        tinypy_method_object_t *method = TINYPY_METHOD_OBJECT(callable);
-
-        if (method->self != NULL && method->function->type == &vm->types[TINYPY_VALUE_FUNCTION] && item_count <= 2U) {
-            tinypy_value_t *bound_items[3];
-            size_t index;
-
-            bound_items[0] = method->self;
-            for (index = 0U; index < item_count; ++index) {
-                bound_items[index + 1U] = items[index];
-            }
-            tinypy_value_t *return_value_2 = tinypy_internal_eval_function_items(method->function, bound_items, item_count + 1U, NULL, out_error);
-            return return_value_2;
-        }
-    }
     /* tinypy_call runs the call slot of a type unless a Python __call__
        overrides it, so only such a __call__ or that of a classic instance,
        whose type has no call slot, can bind to a Python function. */
@@ -571,10 +552,7 @@ static tinypy_value_t *__tinypy_container_call_items(tinypy_vm_t *vm, tinypy_val
         }
         TINYPY_DECREF(method);
     }
-    tinypy_value_t *args = tinypy_tuple_from_items(vm, items, item_count);
-    tinypy_value_t *result = tinypy_call(callable, args, NULL, out_error);
-
-    TINYPY_DECREF(args);
+    tinypy_value_t *result = tinypy_internal_call_items(callable, items, item_count, NULL, out_error);
     return result;
 }
 //////////////////////////////////////////////////////////////////////////

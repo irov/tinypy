@@ -555,6 +555,14 @@ checks the declared arity and rejects keywords with the same diagnostics as
 the PyArg parsers, except under `TINYPY_ARITY_STYLE_UNCHECKED`, where the
 callback parses arguments itself. Public `tinypy_native_function_new`
 callbacks continue to receive a tuple.
+Internal functional consumers and sorting share `tinypy_internal_call_items`.
+Exact Python functions, bound Python methods and native items functions receive
+an array of arguments directly. Legacy native callbacks receive an owned tuple
+through the existing argument cache; retaining it prevents its reuse. Other
+callable objects retain the regular descriptor and call-slot dispatch. The
+helper retains the target across callbacks; callers own the item references.
+Iterator callbacks use `tinypy_internal_object_call_items`, which also takes
+the recursion level of `tinypy_call` when dispatching directly to Python code.
 The host uses the same convention through `tinypy_native_function_new_items`:
 the caller checks `minimum <= count <= maximum` and rejects keywords with
 `PyArg_ParseTuple` diagnostics; for `tinypy_native_function_new_items_keywords`,
@@ -681,6 +689,40 @@ runtime:
 - `__builtin__`, `sys`, `exceptions`, `__future__`, `_codecs`,
   `_functools`, `_weakref`, `_struct`, `_sre`, `array`, and `copy_reg` are
   built in;
+- `xzip(*iterables)`, `xmap(function, *iterables)` and
+  `xfilter(predicate, iterable)` are additional builtins with Python 2.7
+  `itertools.izip`, `imap` and `ifilter` iteration semantics. They acquire
+  iterators left to right at construction, retain them and the callback,
+  and process values only when advanced. No length or length hint is read.
+  `xzip` and `xmap` stop at the shortest input; advancing earlier inputs
+  may consume a value before a later input stops. `xmap(None, ...)` returns
+  argument tuples, including one-element tuples for a single input, and
+  `xfilter(None, ...)` tests the values themselves. Callbacks need not be
+  callable until a value reaches them. Iteration and callback errors propagate
+  at consumption, and a subsequent advance can resume if the inputs allow it, including
+  after a callback raised `StopIteration`. The iterators return themselves
+  from `iter`, expose `next`, support subclassing, and have no length,
+  indexing or length hint. Wrapper storage depends on the number of inputs,
+  not their lengths; each in-progress call owns its current row so a callback
+  can advance the same wrapper reentrantly. `xfilter` polls the host interrupt
+  callback while seeking a matching value. The existing `range`, `xrange`,
+  `zip`, `map` and `filter` retain their contracts. These extensions do not
+  provide an `itertools` module;
+- `xchain(*iterables)` follows Python 2.7 `itertools.chain`, acquiring each
+  inner iterator only when reached. `xchain.from_iterable(iterables)` acquires
+  the outer iterator at construction and reads its inputs on demand. Errors
+  from an active iterator allow retry, while failure to acquire an inner
+  iterator or advance the outer iterator terminates the chain. Exhaustion
+  releases both levels. `xslice(iterable, stop)` and
+  `xslice(iterable, start, stop[, step])` follow Python 2.7 `itertools.islice`:
+  bounds convert with the integer protocol, including float truncation, before
+  acquiring the input iterator. Positions are nonnegative and steps positive;
+  `None` supplies the defaults. An advance skips to the next selected position
+  before checking stop, so an empty slice can still consume its start prefix.
+  Exhaustion, stop or an input error releases the source and is terminal.
+  Both types are single-pass, support subclassing, expose no length or hint,
+  and poll host interruption during skip loops. Active inputs are retained
+  across callbacks that advance the same wrapper reentrantly;
 - `_codecs` guarantees ASCII, Latin-1, UTF-8, and the `hex` transform codec;
   other encodings must be provided by a host search function;
 - the native `copy_reg` and `hex_encode`/`hex_decode` functions, implemented

@@ -166,6 +166,102 @@ tinypy_value_t *tinypy_call(tinypy_value_t *callable, tinypy_value_t *args, tiny
     return result;
 }
 //////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_call_items(tinypy_value_t *callable, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
+
+    if (callable->type == &vm->types[TINYPY_VALUE_FUNCTION]) {
+        tinypy_value_t *result = tinypy_internal_eval_function_items(callable, items, count, kwargs, out_error);
+        return result;
+    }
+    if (callable->type == &vm->types[TINYPY_VALUE_METHOD]) {
+        tinypy_method_object_t *method = TINYPY_METHOD_OBJECT(callable);
+
+        if (method->self != NULL && method->function->type == &vm->types[TINYPY_VALUE_FUNCTION] && count < SIZE_MAX / sizeof(tinypy_value_t *)) {
+            tinypy_value_t *local_items[4];
+            tinypy_value_t **bound_items = local_items;
+            size_t bound_count = count + 1U;
+
+            if (bound_count > sizeof(local_items) / sizeof(local_items[0])) {
+                bound_items = (tinypy_value_t **)__tinypy_internal_vm_allocate_checked(vm, bound_count * sizeof(*bound_items), out_error);
+                if (bound_items == NULL) {
+                    return NULL;
+                }
+            }
+            bound_items[0] = method->self;
+            for (size_t index = 0U; index < count; ++index) {
+                bound_items[index + 1U] = items[index];
+            }
+            tinypy_value_t *result = tinypy_internal_eval_function_items(method->function, bound_items, bound_count, kwargs, out_error);
+
+            if (bound_items != local_items) {
+                tinypy_internal_vm_deallocate(vm, bound_items, bound_count * sizeof(*bound_items));
+            }
+            return result;
+        }
+    }
+    if (callable->type == &vm->types[TINYPY_VALUE_NATIVE_FUNCTION]) {
+        if (__tinypy_internal_call_enter(vm, out_error) == TINYPY_FALSE) {
+            return NULL;
+        }
+        tinypy_value_t *result = tinypy_internal_native_function_call_items(callable, items, count, kwargs, out_error);
+
+        __tinypy_internal_call_leave(vm);
+        return result;
+    }
+    tinypy_value_t *args = tinypy_internal_tuple_from_items_checked(vm, items, count, out_error);
+    if (args == NULL) {
+        return NULL;
+    }
+    tinypy_value_t *result = tinypy_call(callable, args, kwargs, out_error);
+
+    TINYPY_DECREF(args);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* The caller owns the item references for the whole call. Hold the target
+   even when a descriptor or callback removes the field that supplied it. */
+tinypy_value_t *tinypy_internal_call_items(tinypy_value_t *callable, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    TINYPY_INCREF(callable);
+    tinypy_value_t *result = __tinypy_call_items(callable, items, count, kwargs, out_error);
+
+    TINYPY_DECREF(callable);
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
+/* Like tinypy_call, a general object call takes a recursion level before
+   entering Python code. Builtin map/filter and sorting use the direct
+   evaluation convention above; iterator callbacks use this object call. */
+tinypy_value_t *tinypy_internal_object_call_items(tinypy_value_t *callable, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(callable);
+    size_t levels = callable->type == &vm->types[TINYPY_VALUE_FUNCTION] ? 1U : 0U;
+
+    if (callable->type == &vm->types[TINYPY_VALUE_METHOD]) {
+        tinypy_method_object_t *method = TINYPY_METHOD_OBJECT(callable);
+
+        /* method_call delegates through tinypy_call once more. */
+        levels = method->self != NULL && method->function->type == &vm->types[TINYPY_VALUE_FUNCTION] ? 2U : 0U;
+    }
+    if (levels == 0U) {
+        tinypy_value_t *result = tinypy_internal_call_items(callable, items, count, kwargs, out_error);
+        return result;
+    }
+    for (size_t entered = 0U; entered < levels; ++entered) {
+        if (__tinypy_internal_call_enter(vm, out_error) == TINYPY_FALSE) {
+            while (entered != 0U) {
+                __tinypy_internal_call_leave(vm);
+                --entered;
+            }
+            return NULL;
+        }
+    }
+    tinypy_value_t *result = tinypy_internal_call_items(callable, items, count, kwargs, out_error);
+
+    for (size_t index = 0U; index < levels; ++index) {
+        __tinypy_internal_call_leave(vm);
+    }
+    return result;
+}
+//////////////////////////////////////////////////////////////////////////
 tinypy_value_t *tinypy_function_code(const tinypy_value_t *function) {
     tinypy_value_t *return_value_1 = TINYPY_FUNCTION_OBJECT((tinypy_value_t *)function)->code;
     return return_value_1;
