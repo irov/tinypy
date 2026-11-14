@@ -10,6 +10,7 @@ typedef enum tinypy_functional_iterator_kind_e {
 typedef struct tinypy_functional_iterator_payload_t {
     tinypy_value_t *iterators;
     tinypy_value_t *callable;
+    tinypy_value_t *exhausted;
 } tinypy_functional_iterator_payload_t;
 //////////////////////////////////////////////////////////////////////////
 typedef struct tinypy_chain_payload_t {
@@ -44,6 +45,9 @@ static void __tinypy_functional_iterator_release_references(tinypy_value_t *valu
     }
     if (payload->callable != NULL) {
         visit(payload->callable, user_data);
+    }
+    if (payload->exhausted != NULL) {
+        visit(payload->exhausted, user_data);
     }
 }
 //////////////////////////////////////////////////////////////////////////
@@ -106,6 +110,13 @@ static tinypy_value_t *__tinypy_functional_iterator_create(tinypy_type_t *type, 
 
         payload->callable = TINYPY_RET(callable);
     }
+    if (kind == TINYPY_FUNCTIONAL_ITERATOR_MAP) {
+        payload->exhausted = tinypy_internal_tuple_new_checked(vm, iterator_count, out_error);
+        if (payload->exhausted == NULL) {
+            TINYPY_DECREF(instance);
+            return NULL;
+        }
+    }
     return instance;
 }
 //////////////////////////////////////////////////////////////////////////
@@ -155,10 +166,6 @@ static tinypy_value_t *__tinypy_xmap_next(tinypy_value_t *instance, void *payloa
     tinypy_vm_t *vm = TINYPY_VALUE_VM(instance);
 
     (void)user_data;
-    if (TINYPY_VALUE_KIND(iterator->callable) == TINYPY_VALUE_NONE) {
-        tinypy_value_t *row = __tinypy_functional_iterator_row(vm, iterator->iterators, out_error);
-        return row;
-    }
     size_t count = TINYPY_TUPLE_SIZE(iterator->iterators);
     tinypy_value_t *local_items[8];
     tinypy_value_t **items = local_items;
@@ -171,14 +178,32 @@ static tinypy_value_t *__tinypy_xmap_next(tinypy_value_t *instance, void *payloa
     }
     size_t index = 0U;
     tinypy_value_t *result = NULL;
+    tinypy_bool_t have_item = TINYPY_FALSE;
 
     for (; index < count; ++index) {
-        tinypy_value_t *source = TINYPY_TUPLE_GET(iterator->iterators, index);
-
-        items[index] = tinypy_next(source, out_error);
-        if (items[index] == NULL) {
-            goto cleanup;
+        if (TINYPY_TUPLE_GET(iterator->exhausted, index) == &vm->true_object.base) {
+            items[index] = TINYPY_RET_NONE(vm);
+            continue;
         }
+        tinypy_value_t *source = TINYPY_TUPLE_GET(iterator->iterators, index);
+        tinypy_error_t *iteration_error = NULL;
+        items[index] = tinypy_next(source, &iteration_error);
+        if (items[index] == NULL) {
+            if (tinypy_internal_iteration_failed(vm, iteration_error, out_error) != TINYPY_FALSE) {
+                goto cleanup;
+            }
+            tinypy_tuple_set(iterator->exhausted, index, &vm->true_object.base);
+            items[index] = TINYPY_RET_NONE(vm);
+            continue;
+        }
+        have_item = TINYPY_TRUE;
+    }
+    if (have_item == TINYPY_FALSE) {
+        goto cleanup;
+    }
+    if (TINYPY_VALUE_KIND(iterator->callable) == TINYPY_VALUE_NONE) {
+        result = count == 1U ? TINYPY_RET(items[0U]) : tinypy_internal_tuple_from_items_checked(vm, items, count, out_error);
+        goto cleanup;
     }
     result = tinypy_internal_object_call_items(iterator->callable, items, count, NULL, out_error);
 

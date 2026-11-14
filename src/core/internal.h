@@ -512,6 +512,7 @@ typedef struct tinypy_intern_entry_t {
     X(internal_readonly_key, "readonly", 1) \
     X(internal_reduce_key, "reduce", 1) \
     X(internal_remove_key, "remove", 1) \
+    X(internal_remove_if_key, "remove_if", 1) \
     X(internal_replace_key, "replace", 1) \
     X(internal_rfind_key, "rfind", 1) \
     X(internal_rindex_key, "rindex", 1) \

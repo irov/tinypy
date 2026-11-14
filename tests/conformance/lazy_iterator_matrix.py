@@ -5,7 +5,12 @@ import sys
 try:
     xzip, xmap, xfilter
 except NameError:
-    from itertools import izip as xzip, imap as xmap, ifilter as xfilter
+    from itertools import izip as xzip, ifilter as xfilter, imap as _recursion_xmap
+    import os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'upstream'))
+    from local.lazy_map_reference import xmap
+else:
+    _recursion_xmap = xmap
 
 try:
     xchain, xslice
@@ -91,6 +96,26 @@ def emit(identity, function, *args):
     except BaseException as error:
         outcome = 'error:' + type(error).__name__
     print identity + '\t' + outcome + '\t' + repr(events)
+
+
+def map_values(callback, sources):
+    function = None if callback == 'none' else lambda *items: items
+    actual = list(xmap(function, *sources))
+    expected = map(function, *sources)
+    assert actual == expected, (actual, expected)
+    return actual
+
+
+variants = ((), (None,), (0,), (1, 2), ('x', None, 3))
+for callback in ('none', 'row'):
+    for left_index, left in enumerate(variants):
+        emit('map-values/%s/%d' % (callback, left_index), map_values, callback, (left,))
+        for right_index, right in enumerate(variants):
+            emit('map-values/%s/%d/%d' % (callback, left_index, right_index),
+                 map_values, callback, (left, right))
+            for third_index, third in enumerate(variants):
+                emit('map-values/%s/%d/%d/%d' % (callback, left_index, right_index, third_index),
+                     map_values, callback, (left, right, third))
 
 
 modes = ('empty', 'one', 'pair', 'zeros', 'next-error', 'iter-error')
@@ -199,7 +224,10 @@ def recursive_work(operation, callback):
     if operation == 'map':
         return map(callback, [1, 2])
     if operation == 'xmap':
-        return list(xmap(callback, [1, 2]))
+        # One ordinary callback and one input have identical map/imap rows.
+        # Use CPython's native iterator for native callback recursion limits;
+        # the Python-only row oracle adds its own constructor/next frames.
+        return list(_recursion_xmap(callback, [1, 2]))
     if operation == 'filter':
         return filter(callback, [1, 2])
     if operation == 'xfilter':

@@ -308,6 +308,20 @@ An insertion that leaves insufficient memory to grow the table raises
 CPython 2.7's listsort, including comparison counts and the partially sorted
 order after a comparison raises an exception.
 
+Lists, dictionaries and mutable sets additionally expose `remove_if(predicate)`.
+It calls the predicate once per original entry, removes every entry whose result
+is truthy, and returns `None`. Dictionary predicates receive `(key, value)`;
+list and set predicates receive the element. List survivor order and dictionary
+and set survivor table order are preserved. These are TinyPy extensions, absent
+from CPython 2.7. Filtering takes an owned snapshot and commits only after all
+predicate calls and truth conversions succeed, using linear temporary storage.
+It never rehashes keys or calls key equality. Predicate errors and interruption
+leave removals unapplied. Predicates must not mutate the original container,
+including through truth conversion or result finalization. Mutation detection
+raises `RuntimeError` only in builds without `NDEBUG`; Release builds compile
+out the version reads and checks. Mutations made by a callback itself are not
+rolled back. Removed-object finalizers run after the container is consistent.
+
 Functions, bound Python methods, code objects, generators, set, and frozenset
 support weak references. A generator's weakref callbacks run before
 `finally` when it is closed during destruction. Basic ref/proxy caches
@@ -690,14 +704,20 @@ runtime:
   `_functools`, `_weakref`, `_struct`, `_sre`, `array`, and `copy_reg` are
   built in;
 - `xzip(*iterables)`, `xmap(function, *iterables)` and
-  `xfilter(predicate, iterable)` are additional builtins with Python 2.7
-  `itertools.izip`, `imap` and `ifilter` iteration semantics. They acquire
-  iterators left to right at construction, retain them and the callback,
-  and process values only when advanced. No length or length hint is read.
-  `xzip` and `xmap` stop at the shortest input; advancing earlier inputs
-  may consume a value before a later input stops. `xmap(None, ...)` returns
-  argument tuples, including one-element tuples for a single input, and
-  `xfilter(None, ...)` tests the values themselves. Callbacks need not be
+  `xfilter(predicate, iterable)` are additional single-pass iterator builtins.
+  `xzip` and `xfilter` follow Python 2.7 `itertools.izip` and `ifilter`.
+  `xmap` uses Python 2.7 `map` row semantics lazily: it stops after the
+  longest input, pads shorter inputs with `None`, and marks each input
+  permanently exhausted after its first normal end. Rows advance active inputs
+  left to right, including when several arguments share one iterator.
+  `xmap(None, iterable)` yields the elements themselves; with several inputs,
+  `xmap(None, ...)` yields argument tuples. These rules also apply with an
+  ordinary callback, which receives `None` for exhausted input positions.
+  `xzip` stops at the shortest input; advancing earlier inputs may consume a
+  value before a later input stops. All three types acquire iterators left to
+  right at construction, retain them and the callback, and process values only
+  when advanced. No length or length hint is read. `xfilter(None, ...)` tests
+  the values themselves. Callbacks need not be
   callable until a value reaches them. Iteration and callback errors propagate
   at consumption, and a subsequent advance can resume if the inputs allow it, including
   after a callback raised `StopIteration`. The iterators return themselves
@@ -707,7 +727,13 @@ runtime:
   can advance the same wrapper reentrantly. `xfilter` polls the host interrupt
   callback while seeking a matching value. The existing `range`, `xrange`,
   `zip`, `map` and `filter` retain their contracts. These extensions do not
-  provide an `itertools` module;
+  provide an `itertools` module. Replacement of eager operations still changes
+  the result type, callback/error timing and partial-consumption side effects.
+  In particular, `StopIteration` raised by a callback ends `for`, `list` and
+  `tuple` consumers; eager `map` and `filter` propagate it. The wrapper can
+  resume on a subsequent explicit `next`, as before. Inputs are read live:
+  materializing the output does not snapshot inputs before callbacks execute.
+  Snapshots used by notification or task-cancellation handlers must remain;
 - `xchain(*iterables)` follows Python 2.7 `itertools.chain`, acquiring each
   inner iterator only when reached. `xchain.from_iterable(iterables)` acquires
   the outer iterator at construction and reads its inputs on demand. Errors
@@ -717,12 +743,18 @@ runtime:
   `xslice(iterable, start, stop[, step])` follow Python 2.7 `itertools.islice`:
   bounds convert with the integer protocol, including float truncation, before
   acquiring the input iterator. Positions are nonnegative and steps positive;
-  `None` supplies the defaults. An advance skips to the next selected position
+  `None` supplies the defaults. Negative bounds and reverse traversal raise
+  `ValueError`; `xslice` does not replace `sequence[-2:]` or `sequence[::-1]`.
+  Ordinary sequence slices use `__index__`, rather than this `islice` integer
+  conversion. An advance skips to the next selected position
   before checking stop, so an empty slice can still consume its start prefix.
   Exhaustion, stop or an input error releases the source and is terminal.
   Both types are single-pass, support subclassing, expose no length or hint,
   and poll host interruption during skip loops. Active inputs are retained
-  across callbacks that advance the same wrapper reentrantly;
+  across callbacks that advance the same wrapper reentrantly. Unlike a sequence
+  slice, `xslice` reads live input as it advances and does not produce a snapshot.
+  End-relative bounds on an unknown-length input require buffering; full
+  reversal requires materializing the entire finite input;
 - `_codecs` guarantees ASCII, Latin-1, UTF-8, and the `hex` transform codec;
   other encodings must be provided by a host search function;
 - the native `copy_reg` and `hex_encode`/`hex_decode` functions, implemented

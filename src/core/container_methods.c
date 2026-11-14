@@ -8,6 +8,120 @@
 #define TINYPY_LIST_SORT_TEMPORARY_SIZE 256U
 
 //////////////////////////////////////////////////////////////////////////
+static int32_t __tinypy_container_remove_if_test(tinypy_value_t *predicate, tinypy_value_t *const *items, size_t count, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(predicate);
+
+    if (tinypy_internal_eval_poll_interrupt(vm, out_error) == TINYPY_FALSE) {
+        return INT32_C(-1);
+    }
+    tinypy_value_t *selected = tinypy_internal_call_items(predicate, items, count, NULL, out_error);
+    if (selected == NULL) {
+        return INT32_C(-1);
+    }
+    int32_t truth = tinypy_truth(selected, out_error);
+    TINYPY_DECREF(selected);
+    return truth;
+}
+//////////////////////////////////////////////////////////////////////////
+static tinypy_value_t *__tinypy_container_remove_if_method(tinypy_value_t *function, tinypy_value_t *self, tinypy_value_t *const *items, size_t count, tinypy_value_t *kwargs, tinypy_error_t **out_error) {
+    tinypy_vm_t *vm = TINYPY_VALUE_VM(function);
+    tinypy_value_t *predicate = items[0U];
+    tinypy_value_type_e kind = TINYPY_VALUE_KIND(self);
+
+    (void)count;
+    (void)kwargs;
+    if (tinypy_internal_object_callable(predicate) == TINYPY_FALSE) {
+        tinypy_internal_make_vm_error(vm, TINYPY_ERROR_TYPE, "remove_if predicate must be callable", out_error);
+        return NULL;
+    }
+    /* Filter owned snapshots so callbacks keep their arguments alive and
+       finalizers see the complete result. Predicate errors commit no removals. */
+    if (kind == TINYPY_VALUE_LIST) {
+        size_t size = TINYPY_LIST_SIZE(self);
+        tinypy_value_t *snapshot = tinypy_internal_list_from_items_checked(vm, TINYPY_LIST_OBJECT(self)->items, size, out_error);
+        if (snapshot == NULL) {
+            return NULL;
+        }
+#if !defined(NDEBUG)
+        uint64_t version = TINYPY_LIST_OBJECT(self)->mutation_version;
+#endif
+        size_t kept = 0U;
+        for (size_t index = 0U; index < size; ++index) {
+            tinypy_value_t *item = TINYPY_LIST_GET(snapshot, index);
+            int32_t selected = __tinypy_container_remove_if_test(predicate, &item, 1U, out_error);
+            if (selected < 0) {
+                TINYPY_DECREF(snapshot);
+                return NULL;
+            }
+#if !defined(NDEBUG)
+            if (TINYPY_LIST_OBJECT(self)->mutation_version != version) {
+                TINYPY_DECREF(snapshot);
+                tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "container modified during remove_if", out_error);
+                return NULL;
+            }
+#endif
+            if (selected != 0) {
+                continue;
+            }
+            if (kept != index) {
+                tinypy_list_set(snapshot, kept, item);
+            }
+            kept += 1U;
+        }
+        if (kept != size) {
+            size_t current_size = TINYPY_LIST_SIZE(self);
+            if (tinypy_internal_list_replace_range_checked(self, 0U, current_size, TINYPY_LIST_OBJECT(snapshot)->items, kept, out_error) == TINYPY_FALSE) {
+                TINYPY_DECREF(snapshot);
+                return NULL;
+            }
+        }
+        TINYPY_DECREF(snapshot);
+        return TINYPY_RET_NONE(vm);
+    }
+    tinypy_value_t *dict = kind == TINYPY_VALUE_DICT ? self : TINYPY_SET_OBJECT(self)->dict;
+    tinypy_value_t *snapshot = tinypy_internal_dict_snapshot(dict, out_error);
+    if (snapshot == NULL) {
+        return NULL;
+    }
+#if !defined(NDEBUG)
+    uint64_t version = TINYPY_DICT_OBJECT(dict)->mutation_version;
+#endif
+    size_t size = TINYPY_DICT_SIZE(snapshot);
+    size_t position = 0U;
+    for (;;) {
+        const tinypy_dict_entry_t *entry = tinypy_internal_dict_next_entry(snapshot, &position);
+        if (entry == NULL) {
+            break;
+        }
+        tinypy_value_t *arguments[2] = {entry->key, entry->value};
+        size_t argument_count = kind == TINYPY_VALUE_DICT ? 2U : 1U;
+        int32_t selected = __tinypy_container_remove_if_test(predicate, arguments, argument_count, out_error);
+        if (selected < 0) {
+            TINYPY_DECREF(snapshot);
+            return NULL;
+        }
+#if !defined(NDEBUG)
+        if (TINYPY_DICT_OBJECT(dict)->mutation_version != version) {
+            TINYPY_DECREF(snapshot);
+            tinypy_internal_make_vm_error(vm, TINYPY_ERROR_RUNTIME, "container modified during remove_if", out_error);
+            return NULL;
+        }
+#endif
+        if (selected == 0) {
+            continue;
+        }
+        (void)tinypy_internal_dict_delete_index(vm, snapshot, position - 1U, NULL, NULL);
+    }
+    if (TINYPY_DICT_SIZE(snapshot) != size) {
+        tinypy_internal_dict_swap_contents(dict, snapshot);
+        if (kind == TINYPY_VALUE_SET) {
+            TINYPY_SET_OBJECT(self)->hash_computed = TINYPY_FALSE;
+        }
+    }
+    TINYPY_DECREF(snapshot);
+    return TINYPY_RET_NONE(vm);
+}
+//////////////////////////////////////////////////////////////////////////
 static tinypy_bool_t __tinypy_container_integer_result(tinypy_value_t *value, int64_t *out_value, tinypy_error_t **out_error) {
     tinypy_bool_t result = tinypy_internal_index_as_i64(value, out_value, TINYPY_FALSE, out_error);
 
@@ -2506,6 +2620,7 @@ void tinypy_internal_initialize_container_types(tinypy_vm_t *vm) {
     tinypy_internal_type_add_items_method(&vm->types[TINYPY_VALUE_LIST], vm->internal_insert_key, __tinypy_list_insert_method, NULL, 2U, 2U, TINYPY_ARITY_STYLE_PARSED);
     tinypy_internal_type_add_items_method(&vm->types[TINYPY_VALUE_LIST], vm->internal_pop_key, __tinypy_list_pop_method, NULL, 0U, 1U, TINYPY_ARITY_STYLE_PARSED);
     tinypy_internal_type_add_items_method(&vm->types[TINYPY_VALUE_LIST], vm->internal_remove_key, __tinypy_list_remove_method, NULL, 1U, 1U, TINYPY_ARITY_STYLE_SINGLE);
+    tinypy_internal_type_add_items_method(&vm->types[TINYPY_VALUE_LIST], vm->internal_remove_if_key, __tinypy_container_remove_if_method, NULL, 1U, 1U, TINYPY_ARITY_STYLE_SINGLE);
     tinypy_internal_type_add_items_method(&vm->types[TINYPY_VALUE_LIST], vm->internal_count_key, __tinypy_sequence_count_method, NULL, 1U, 1U, TINYPY_ARITY_STYLE_SINGLE);
     tinypy_internal_type_add_items_method(&vm->types[TINYPY_VALUE_LIST], vm->internal_index_key, __tinypy_sequence_index_method, NULL, 1U, 3U, TINYPY_ARITY_STYLE_PARSED);
     tinypy_internal_type_add_items_method(&vm->types[TINYPY_VALUE_LIST], vm->internal_reverse_key, __tinypy_list_reverse_method, NULL, 0U, 0U, TINYPY_ARITY_STYLE_PARSED);
@@ -2538,6 +2653,8 @@ void tinypy_internal_initialize_container_types(tinypy_vm_t *vm) {
     tinypy_internal_type_add_items_method(&vm->types[TINYPY_VALUE_DICT], vm->internal_setdefault_key, __tinypy_dict_setdefault_method, NULL, 1U, 2U, TINYPY_ARITY_STYLE_UNPACK);
     tinypy_internal_type_add_items_method(&vm->types[TINYPY_VALUE_DICT], vm->internal_pop_key, __tinypy_dict_pop_method, NULL, 1U, 2U, TINYPY_ARITY_STYLE_UNPACK);
     tinypy_internal_type_add_items_method(&vm->types[TINYPY_VALUE_DICT], vm->internal_popitem_key, __tinypy_dict_popitem_method, NULL, 0U, 0U, TINYPY_ARITY_STYLE_PARSED);
+    tinypy_internal_type_add_items_method(&vm->types[TINYPY_VALUE_DICT], vm->internal_remove_if_key, __tinypy_container_remove_if_method, NULL, 1U, 1U, TINYPY_ARITY_STYLE_SINGLE);
+    tinypy_internal_type_add_items_method(&vm->types[TINYPY_VALUE_SET], vm->internal_remove_if_key, __tinypy_container_remove_if_method, NULL, 1U, 1U, TINYPY_ARITY_STYLE_SINGLE);
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_DICT], vm->internal_special_iter_key, __tinypy_container_iter_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_DICT], vm->internal_special_length_key, __tinypy_container_len_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);
     tinypy_internal_type_add_method(&vm->types[TINYPY_VALUE_DICT], vm->internal_special_getitem_key, __tinypy_container_getitem_method, NULL, NULL, TINYPY_NATIVE_DESCRIPTOR_AUTO);

@@ -2108,3 +2108,232 @@ assert not ClearingResultKey.armed
 assert 0 < len(shared_result) < 60
 for clearing_key in shared_result:
     assert clearing_key in clearing_source
+
+
+def check_remove_if():
+    tab = "active"
+    entries = {("active", 1): 10, ("other", 1): 20, ("active", 2): 30,
+               ("active", 3): 40, ("other", 2): 50}
+    alias = entries
+    assert entries.remove_if(lambda key, value: key[0] == tab) is None
+    assert entries is alias
+    assert entries == {("other", 1): 20, ("other", 2): 50}
+
+    class Truth(object):
+        def __init__(self, value):
+            self.value = value
+
+        def __nonzero__(self):
+            return self.value % 2 == 0
+
+    class Predicate(object):
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, *args):
+            self.calls.append(args)
+            return Truth(args[0])
+
+    class Failure(Exception):
+        pass
+
+    class FailingTruth(object):
+        def __nonzero__(self):
+            raise Failure("truth")
+
+    def failing_predicate(*args):
+        if args[0] == 3:
+            raise Failure("predicate")
+        return True
+
+    for constructor in (list, dict, set):
+        original = dict((value, value * 10) for value in range(8)) if constructor is dict else range(8)
+        target = constructor(original)
+        alias = target
+        before = list(target)
+        predicate = Predicate()
+        assert target.remove_if(predicate) is None
+        assert target is alias
+        assert list(target) == [value for value in before if value % 2 != 0]
+        assert [args[0] for args in predicate.calls] == before
+        if constructor is dict:
+            assert predicate.calls == [(value, value * 10) for value in before]
+        else:
+            assert predicate.calls == [(value,) for value in before]
+        assert target.remove_if(lambda *args: False) is None
+        assert len(target) == 4
+        assert target.remove_if(lambda *args: True) is None
+        assert len(target) == 0
+        assert target.remove_if(lambda *args: 1 / 0) is None
+
+        for invalid in (None, 0):
+            try:
+                target.remove_if(invalid)
+            except TypeError:
+                pass
+            else:
+                assert False, "noncallable predicate accepted for empty container"
+
+        for invoke in (lambda: target.remove_if(),
+                       lambda: target.remove_if(bool, bool),
+                       lambda: target.remove_if(predicate=bool)):
+            try:
+                invoke()
+            except TypeError:
+                pass
+            else:
+                assert False, "invalid remove_if arguments accepted"
+
+        for callback in (failing_predicate, lambda *args: FailingTruth()):
+            target = constructor(original)
+            try:
+                target.remove_if(callback)
+            except Failure:
+                pass
+            else:
+                assert False, "predicate failure swallowed"
+            assert target == constructor(original)
+
+        target = constructor(original)
+        assert constructor.remove_if(target, lambda *args: True) is None
+        assert len(target) == 0
+        try:
+            constructor.remove_if(object(), bool)
+        except TypeError:
+            pass
+        else:
+            assert False, "incorrect remove_if receiver accepted"
+
+    values = [2, 2, 1, 2, 3, 2, 2]
+    assert values.remove_if(lambda value: value == 2) is None
+    assert values == [1, 3]
+
+    class ListSubclass(list):
+        def __setitem__(self, index, value):
+            assert False, "remove_if called overridden __setitem__"
+
+    class DictSubclass(dict):
+        def __delitem__(self, key):
+            assert False, "remove_if called overridden __delitem__"
+
+    class SetSubclass(set):
+        def remove(self, value):
+            assert False, "remove_if called overridden remove"
+
+    for target in (ListSubclass([1, 2, 2, 3]), DictSubclass({1: 10, 2: 20, 3: 30}),
+                   SetSubclass([1, 2, 3])):
+        target.remove_if(lambda *args: args[0] == 2)
+        assert list(target) == [1, 3]
+
+    class Key(object):
+        armed = False
+
+        def __init__(self, value):
+            self.value = value
+
+        def __hash__(self):
+            assert not Key.armed, "remove_if rehashed a key"
+            return 1
+
+        def __eq__(self, other):
+            assert not Key.armed, "remove_if compared keys"
+            return self is other
+
+    keys = [Key(value) for value in range(20)]
+    mapping = dict((key, key.value) for key in keys)
+    members = set(keys)
+    mapping_order = list(mapping)
+    set_order = list(members)
+    Key.armed = True
+    mapping.remove_if(lambda key, value: value % 2 == 0)
+    members.remove_if(lambda key: key.value % 2 == 0)
+    assert [key.value for key in mapping] == [key.value for key in mapping_order if key.value % 2]
+    assert [key.value for key in members] == [key.value for key in set_order if key.value % 2]
+    Key.armed = False
+
+
+check_remove_if()
+
+
+def check_remove_if_mutation():
+    results = []
+    for constructor in (list, dict, set):
+        for phase in ("predicate", "truth", "finalizer"):
+            target = {1: 10, 2: 20, 3: 30} if constructor is dict else constructor([1, 2, 3])
+
+            class MutatingTruth(object):
+                def __nonzero__(self):
+                    if phase == "truth":
+                        if constructor is list:
+                            del target[:]
+                        else:
+                            target.clear()
+                    return True
+
+                def __del__(self):
+                    if phase == "finalizer":
+                        if constructor is list:
+                            del target[:]
+                        else:
+                            target.clear()
+
+            def mutate(*args):
+                if phase == "predicate":
+                    if constructor is list:
+                        del target[:]
+                    else:
+                        target.clear()
+                return MutatingTruth()
+
+            try:
+                target.remove_if(mutate)
+            except RuntimeError as error:
+                assert str(error) == "container modified during remove_if"
+                results.append(True)
+            else:
+                results.append(False)
+            assert len(target) == 0
+    assert results == [True] * 9 or results == [False] * 9
+    # Focused invocations verify the expected build, including Release's
+    # removal of the diagnostics rather than merely accepting either mode.
+    import sys
+    if "--remove-if-debug" in sys.argv:
+        assert results == [True] * 9
+    if "--remove-if-release" in sys.argv:
+        assert results == [False] * 9
+
+
+check_remove_if_mutation()
+
+
+remove_if_finalizer_target = []
+remove_if_finalizer_events = []
+
+
+class RemoveIfFinalizer(object):
+    def __del__(self):
+        remove_if_finalizer_events.append(list(remove_if_finalizer_target))
+        if isinstance(remove_if_finalizer_target, list):
+            remove_if_finalizer_target.append("finalized")
+        elif isinstance(remove_if_finalizer_target, dict):
+            remove_if_finalizer_target["finalized"] = None
+        else:
+            remove_if_finalizer_target.add("finalized")
+
+
+remove_if_finalizer_target.extend([RemoveIfFinalizer(), "keep"])
+remove_if_finalizer_target.remove_if(lambda value: isinstance(value, RemoveIfFinalizer))
+assert remove_if_finalizer_events == [["keep"]]
+assert remove_if_finalizer_target == ["keep", "finalized"]
+
+remove_if_finalizer_events = []
+remove_if_finalizer_target = {"drop": RemoveIfFinalizer(), "keep": None}
+remove_if_finalizer_target.remove_if(lambda key, value: key == "drop")
+assert remove_if_finalizer_events == [["keep"]]
+assert remove_if_finalizer_target == {"keep": None, "finalized": None}
+
+remove_if_finalizer_events = []
+remove_if_finalizer_target = set([RemoveIfFinalizer(), "keep"])
+remove_if_finalizer_target.remove_if(lambda value: isinstance(value, RemoveIfFinalizer))
+assert remove_if_finalizer_events == [["keep"]]
+assert remove_if_finalizer_target == set(["keep", "finalized"])

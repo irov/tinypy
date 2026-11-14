@@ -34,12 +34,34 @@ The current implementation provides:
 The builtins `xzip(*iterables)`, `xmap(function, *iterables)` and
 `xfilter(predicate, iterable)` return single-pass iterators. They acquire input
 iterators at construction and process values on demand without collecting the
-result in a list. They follow Python 2.7 `itertools.izip`, `imap` and `ifilter`
-semantics: `xzip` and `xmap` stop at the shortest input, `xmap(None, ...)` yields
-argument tuples, and `xfilter(None, ...)` keeps truthy values. Callbacks and
-iteration errors occur during consumption; changes to inputs remain visible.
+result in a list. `xzip` follows Python 2.7 `itertools.izip` and stops at the
+shortest input; `xfilter` follows `itertools.ifilter`, with `None` keeping
+truthy values. `xmap` follows Python 2.7 `map` row rules lazily: it continues
+to the longest input, supplies `None` for exhausted inputs, and never advances
+an exhausted input again. `xmap(None, iterable)` yields the elements themselves;
+with several inputs, `xmap(None, ...)` yields argument tuples. For example,
+`list(xmap(None, [1], [2, 3]))` is `[(1, 2), (None, 3)]`.
 Use `list(...)` to collect a result, and the existing `xrange` for lazy numeric
 ranges. `range`, `zip`, `map` and `filter` keep their Python 2.7 behavior.
+
+Lazy replacements retain observable differences: callbacks, side effects and
+iteration errors occur during consumption, and stopping early leaves later
+work unperformed. No input length or length hint is read. A `StopIteration`
+raised by an `xmap` or `xfilter` callback ends a `for`, `list(...)` or
+`tuple(...)` consumer, whereas eager `map` or `filter` propagates that callback
+exception. A later explicit `next` can resume the wrapper. Inputs remain live;
+collecting the output does not take a snapshot of the inputs before callbacks
+run. Existing input snapshots remain necessary when handlers mutate a collection.
+
+`list.remove_if(predicate)`, `dict.remove_if(predicate)` and
+`set.remove_if(predicate)` remove all matching entries in place and return
+`None`. The predicate receives one element for lists and sets, or `(key, value)`
+for dictionaries, for example `entries.remove_if(lambda key, value: key[0] == tab)`.
+Lists preserve the order of retained elements. Filtering uses an owned snapshot
+and commits after every predicate succeeds; a predicate or truth-conversion
+error leaves removals unapplied. Predicates must not modify the container;
+Debug builds diagnose changes with `RuntimeError`. Release builds omit this
+check.
 
 `xchain(*iterables)` walks inputs consecutively and opens each input only when
 reached. `xchain.from_iterable(iterables)` also reads the sequence of inputs on
@@ -47,6 +69,13 @@ demand. `xslice(iterable, stop)` and `xslice(iterable, start, stop[, step])`
 select positions without collecting the input. Bounds follow Python 2.7
 `itertools.islice`: nonnegative positions, a positive step, and `None` defaults.
 For example, `list(xslice(xchain(xrange(1000000000), [1]), 3))` is `[0, 1, 2]`.
+It does not support negative bounds or reverse traversal and therefore cannot
+replace `values[-2:]` or `values[::-1]`. It is single-pass, reads live inputs,
+and can consume the start prefix even for an empty result. Bounds use Python 2
+`islice` integer conversion, including float truncation; ordinary sequence
+slices use `__index__`. Supporting end-relative bounds on a one-pass input
+requires buffering, and full reverse traversal requires materializing the
+entire finite input.
 
 tinypy deliberately has no cyclic collector. Embedders must release owned
 values and break owning cycles before destroying a VM.

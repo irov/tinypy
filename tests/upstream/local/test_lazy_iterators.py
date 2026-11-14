@@ -1,4 +1,4 @@
-"""Project-authored lazy builtin checks; Python 2.7 itertools is the oracle."""
+"""Lazy builtins checked against Python 2.7 map and itertools contracts."""
 
 import unittest
 import _weakref
@@ -6,7 +6,8 @@ import _weakref
 try:
     xzip, xmap, xfilter
 except NameError:
-    from itertools import izip as xzip, imap as xmap, ifilter as xfilter
+    from itertools import izip as xzip, ifilter as xfilter
+    from local.lazy_map_reference import xmap
 
 try:
     xchain, xslice
@@ -46,14 +47,87 @@ class LazyIterators(unittest.TestCase):
         self.assertEqual(list(xmap(abs, [-1, 2])), [1, 2])
         self.assertEqual(list(xmap(pow, [2, 3], [3, 2])), [8, 9])
 
-    def test_map_none_yields_tuples_including_single_input(self):
-        self.assertEqual(list(xmap(None, [1, 2])), [(1,), (2,)])
-        self.assertEqual(list(xmap(None, [1, 2], [3])), [(1, 3)])
+    def test_map_none_matches_python2_map(self):
+        self.assertEqual(list(xmap(None, [1, 2])), [1, 2])
+        self.assertEqual(list(xmap(None, [1, 2], [3])), [(1, 3), (2, None)])
+        self.assertEqual(list(xmap(None, [], [3])), [(None, 3)])
+        self.assertEqual(list(xmap(None, [], [])), [])
 
-    def test_zip_and_map_stop_at_shortest_input(self):
-        for factory, prefix in ((xzip, ()), (xmap, (None,))):
-            self.assertEqual(list(factory(*(prefix + ([1, 2, 3], [4])))), [(1, 4)])
-            self.assertEqual(list(factory(*(prefix + ([], [4])))), [])
+    def test_map_matches_eager_map_for_finite_inputs(self):
+        variants = ((), (None,), (0,), (1, 2), ('x', None, 3))
+        def row(*items):
+            return items
+        for function in (None, row):
+            for left in variants:
+                self.assertEqual(list(xmap(function, left)), map(function, left))
+                for right in variants:
+                    self.assertEqual(list(xmap(function, left, right)), map(function, left, right))
+                    for third in variants:
+                        self.assertEqual(list(xmap(function, left, right, third)),
+                                         map(function, left, right, third))
+
+    def test_map_shared_source_pads_the_last_row(self):
+        source = iter([1, 2, 3, 4, 5])
+        self.assertEqual(list(xmap(None, source, source)), [(1, 2), (3, 4), (5, None)])
+        source = iter([1, 2, 3, 4, 5])
+        self.assertEqual(list(xmap(lambda *items: items, source, source)),
+                         [(1, 2), (3, 4), (5, None)])
+
+    def test_map_exhausted_sources_are_not_polled_again(self):
+        class Reviving(object):
+            def __init__(self):
+                self.calls = 0
+            def __iter__(self):
+                return self
+            def next(self):
+                self.calls += 1
+                if self.calls == 2:
+                    raise StopIteration
+                return self.calls
+        for function in (None, lambda *items: items):
+            source = Reviving()
+            iterator = xmap(function, source, [10, 20, 30])
+            self.assertEqual(list(iterator), [(1, 10), (None, 20), (None, 30)])
+            self.assertEqual(source.calls, 2)
+            self.assertRaises(StopIteration, next, iterator)
+            self.assertEqual(source.calls, 2)
+            source = Reviving()
+            self.assertEqual(map(function, source, [10, 20, 30]),
+                             [(1, 10), (None, 20), (None, 30)])
+            self.assertEqual(source.calls, 2)
+
+    def test_map_many_unequal_inputs(self):
+        sources = [range(length % 4) for length in range(12)]
+        for function in (None, lambda *items: items):
+            self.assertEqual(list(xmap(function, *sources)), map(function, *sources))
+
+    def test_map_error_after_padding_releases_its_partial_row(self):
+        class Item(object):
+            pass
+        class Failed(Source):
+            def next(self):
+                if self.index == 1:
+                    self.index += 1
+                    raise LookupError('source')
+                return Source.next(self)
+        for count in (3, 12):
+            for function in (None, lambda *items: items):
+                item = Item()
+                reference = _weakref.ref(item)
+                failed = Failed([0, 1, 2], [])
+                sources = [[], [0, item, 2]] + [[0, 1, 2]] * (count - 3) + [failed]
+                iterator = xmap(function, *sources)
+                next(iterator)
+                self.assertRaises(LookupError, next, iterator)
+                self.assertEqual(next(iterator), (None,) + (2,) * (count - 1))
+                del item
+                del sources
+                del iterator
+                self.assertIs(reference(), None)
+
+    def test_zip_stops_at_shortest_input(self):
+        self.assertEqual(list(xzip([1, 2, 3], [4])), [(1, 4)])
+        self.assertEqual(list(xzip([], [4])), [])
 
     def test_filter_none_and_predicate(self):
         self.assertEqual(list(xfilter(None, [0, 1, '', 'a', None])), [1, 'a'])
@@ -124,10 +198,9 @@ class LazyIterators(unittest.TestCase):
         self.assertEqual(list(xzip(source, source)), [(0, 1), (2, 3)])
 
     def test_shorter_right_input_may_consume_one_extra_left_value(self):
-        for factory, prefix in ((xzip, ()), (xmap, (None,))):
-            left = iter([1, 2, 3])
-            self.assertEqual(list(factory(*(prefix + (left, [4])))), [(1, 4)])
-            self.assertEqual(list(left), [3])
+        left = iter([1, 2, 3])
+        self.assertEqual(list(xzip(left, [4])), [(1, 4)])
+        self.assertEqual(list(left), [3])
 
     def test_mutation_before_consumption_is_visible(self):
         for factory, prefix in ((xzip, ()), (xmap, (None,)), (xfilter, (None,))):
@@ -135,7 +208,7 @@ class LazyIterators(unittest.TestCase):
             iterator = factory(*(prefix + (source,)))
             source[0] = 2
             source.append(3)
-            expected = [2, 3] if factory is xfilter else [(2,), (3,)]
+            expected = [(2,), (3,)] if factory is xzip else [2, 3]
             self.assertEqual(list(iterator), expected)
 
     def test_invalid_source_is_rejected_during_construction(self):
@@ -189,7 +262,7 @@ class LazyIterators(unittest.TestCase):
             iterator = factory(*(prefix + (Failing([1, 2, 3], []),)))
             next(iterator)
             self.assertRaises(ValueError, next, iterator)
-            self.assertEqual(list(iterator), [3] if factory is xfilter else [(3,)])
+            self.assertEqual(list(iterator), [(3,)] if factory is xzip else [3])
 
     def test_filter_truth_failure_can_resume(self):
         class Broken(object):
