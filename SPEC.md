@@ -714,7 +714,11 @@ runtime:
   `xmap(None, ...)` yields argument tuples. These rules also apply with an
   ordinary callback, which receives `None` for exhausted input positions.
   `xzip` stops at the shortest input; advancing earlier inputs may consume a
-  value before a later input stops. All three types acquire iterators left to
+  value before a later input stops. Its result tuples are independent and it
+  does not retain a cached row. CPython 2.7 `itertools.izip` caches a result
+  tuple, so references from that cache can delay element finalizers beyond the
+  point when a consumer drops its row; `xzip` intentionally permits earlier
+  release. All three types acquire iterators left to
   right at construction, retain them and the callback, and process values only
   when advanced. No length or length hint is read. `xfilter(None, ...)` tests
   the values themselves. Callbacks need not be
@@ -739,7 +743,12 @@ runtime:
   the outer iterator at construction and reads its inputs on demand. Errors
   from an active iterator allow retry, while failure to acquire an inner
   iterator or advance the outer iterator terminates the chain. Exhaustion
-  releases both levels. `xslice(iterable, stop)` and
+  releases both levels. On normal exhaustion of an active input, the current
+  active slot is cleared unconditionally, matching CPython 2.7 `chain_next`:
+  a reentrant advance that selected a later input does not preserve that input's
+  unconsumed tail. A returned value or an active-input error preserves the
+  current slot. The suspended call retains its local input reference across
+  this clear and any finalizers it invokes. `xslice(iterable, stop)` and
   `xslice(iterable, start, stop[, step])` follow Python 2.7 `itertools.islice`:
   bounds convert with the integer protocol, including float truncation, before
   acquiring the input iterator. Positions are nonnegative and steps positive;

@@ -145,6 +145,46 @@ def chained(left_mode, right_mode, outer_mode, count):
     return consume(iterator, count)
 
 
+def chain_reentry(mode, nested_count, style, tail):
+    class First(object):
+        started = False
+        reentered = False
+        stream = None
+        def __iter__(self):
+            events.append('first-iter')
+            return self
+        def next(self):
+            events.append(('first-next', self.started, self.reentered))
+            if not self.started:
+                self.started = True
+                return 1
+            if not self.reentered:
+                self.reentered = True
+                events.append(('nested', consume(self.stream, nested_count)))
+                if mode == 'error':
+                    raise LookupError('outer advance')
+                if mode == 'value':
+                    return 9
+            raise StopIteration
+    first = First()
+    inputs = [first] + tail
+    stream = xchain(*inputs) if style == 'direct' else xchain.from_iterable(inputs)
+    first.stream = stream
+    try:
+        return consume(stream, 6)
+    finally:
+        first.stream = None
+
+
+tails = ([], [[2, 3]], [[2, 3], [4, 5]], [[], [4, 5]], [[2], [4, 5], [6, 7]])
+for mode in ('stop', 'error', 'value'):
+    for nested_count in (0, 1, 2, 4):
+        for style in ('direct', 'from-iterable'):
+            for tail_index, tail in enumerate(tails):
+                emit('chain-reentry/%s/%d/%s/%d' % (mode, nested_count, style, tail_index),
+                     chain_reentry, mode, nested_count, style, tail)
+
+
 for left in modes:
     for right in modes:
         for outer in ('direct', 'pair', 'next-error', 'iter-error'):

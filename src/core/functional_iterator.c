@@ -364,9 +364,9 @@ static tinypy_value_t *__tinypy_xchain_next(tinypy_value_t *instance, void *payl
             TINYPY_DECREF(active);
             return NULL;
         }
-        if (chain->active == active) {
-            __tinypy_functional_iterator_clear(&chain->active);
-        }
+        /* chain_next clears the current active slot after exhaustion, even
+           if a reentrant advance replaced it with a later input. */
+        __tinypy_functional_iterator_clear(&chain->active);
         TINYPY_DECREF(active);
     }
     return NULL;

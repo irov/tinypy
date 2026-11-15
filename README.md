@@ -41,6 +41,9 @@ to the longest input, supplies `None` for exhausted inputs, and never advances
 an exhausted input again. `xmap(None, iterable)` yields the elements themselves;
 with several inputs, `xmap(None, ...)` yields argument tuples. For example,
 `list(xmap(None, [1], [2, 3]))` is `[(1, 2), (None, 3)]`.
+`xzip` creates independent result tuples and does not cache the last row.
+Unlike CPython 2.7 `itertools.izip`, the iterator itself does not keep that row's
+elements alive after the consumer releases it, so `__del__` can run earlier.
 Use `list(...)` to collect a result, and the existing `xrange` for lazy numeric
 ranges. `range`, `zip`, `map` and `filter` keep their Python 2.7 behavior.
 
@@ -65,7 +68,11 @@ check.
 
 `xchain(*iterables)` walks inputs consecutively and opens each input only when
 reached. `xchain.from_iterable(iterables)` also reads the sequence of inputs on
-demand. `xslice(iterable, stop)` and `xslice(iterable, start, stop[, step])`
+demand. On normal exhaustion of an active input, `xchain` clears the current
+active slot, matching Python 2.7 `itertools.chain`. If a nested `next` switched
+to a later input before the outer advance ended, that later input's remaining
+elements are discarded and traversal continues with the following input.
+`xslice(iterable, stop)` and `xslice(iterable, start, stop[, step])`
 select positions without collecting the input. Bounds follow Python 2.7
 `itertools.islice`: nonnegative positions, a positive step, and `None` defaults.
 For example, `list(xslice(xchain(xrange(1000000000), [1]), 3))` is `[0, 1, 2]`.

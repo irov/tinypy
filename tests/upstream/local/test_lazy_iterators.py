@@ -390,6 +390,119 @@ class LazyIterators(unittest.TestCase):
 
 
 class StreamIterators(unittest.TestCase):
+    def test_chain_reentrant_exhaustion_discards_nested_active(self):
+        events = []
+        class First(object):
+            started = False
+            reentered = False
+            stream = None
+            def __iter__(self):
+                return self
+            def next(self):
+                if not self.started:
+                    self.started = True
+                    return 1
+                if not self.reentered:
+                    self.reentered = True
+                    events.append(next(self.stream))
+                raise StopIteration
+        for style in ('direct', 'from-iterable'):
+            for tail in ([], [[4, 5]]):
+                first = First()
+                inputs = [first, [2, 3]] + tail
+                first.stream = xchain(*inputs) if style == 'direct' else xchain.from_iterable(inputs)
+                try:
+                    self.assertEqual(next(first.stream), 1)
+                    self.assertEqual(list(first.stream), [4, 5] if tail else [])
+                    self.assertEqual(events[-1], 2)
+                finally:
+                    first.stream = None
+
+    def test_chain_reentrant_value_and_error_preserve_nested_active(self):
+        events = []
+        class First(object):
+            started = False
+            reentered = False
+            stream = None
+            def __iter__(self):
+                return self
+            def next(self):
+                if not self.started:
+                    self.started = True
+                    return 1
+                if not self.reentered:
+                    self.reentered = True
+                    events.append(next(self.stream))
+                    if self.fail:
+                        raise LookupError('outer advance')
+                    return 9
+                raise StopIteration
+        for style in ('direct', 'from-iterable'):
+            for fail in (False, True):
+                first = First()
+                first.fail = fail
+                inputs = [first, [2, 3], [4, 5]]
+                first.stream = xchain(*inputs) if style == 'direct' else xchain.from_iterable(inputs)
+                try:
+                    self.assertEqual(next(first.stream), 1)
+                    if fail:
+                        self.assertRaises(LookupError, next, first.stream)
+                    else:
+                        self.assertEqual(next(first.stream), 9)
+                    self.assertEqual(list(first.stream), [3, 4, 5])
+                    self.assertEqual(events[-1], 2)
+                finally:
+                    first.stream = None
+
+    def test_chain_discarded_active_finalizer_can_reenter(self):
+        global _active_stream
+        events = []
+        class First(object):
+            started = False
+            reentered = False
+            def __iter__(self):
+                return self
+            def next(self):
+                if not self.started:
+                    self.started = True
+                    return 1
+                if not self.reentered:
+                    self.reentered = True
+                    events.append(('nested', next(_active_stream)))
+                raise StopIteration
+        first = First()
+        class Second(object):
+            index = 0
+            def __iter__(self):
+                return self
+            def next(self):
+                self.index += 1
+                if self.index > 2:
+                    raise StopIteration
+                return self.index + 1
+            def __del__(self):
+                events.append(('released', next(_active_stream)))
+        class Outer(object):
+            index = 0
+            def __iter__(self):
+                return self
+            def next(self):
+                self.index += 1
+                if self.index == 1:
+                    return first
+                if self.index == 2:
+                    return Second()
+                if self.index == 3:
+                    return [4, 5]
+                raise StopIteration
+        _active_stream = xchain.from_iterable(Outer())
+        try:
+            self.assertEqual(next(_active_stream), 1)
+            self.assertEqual(list(_active_stream), [5])
+            self.assertEqual(events, [('nested', 2), ('released', 4)])
+        finally:
+            _active_stream = None
+
     def test_chain_zero_one_and_many_inputs(self):
         self.assertEqual(list(xchain()), [])
         self.assertEqual(list(xchain([1, 2])), [1, 2])

@@ -127,7 +127,7 @@ of arbitrary Python programs was tested. The product domains are complete for
 their listed finite operands; protocol tests use explicit regression witnesses.
 Platform-specific behavior needs the same run on the target platform.
 
-The lazy iterator matrix contains 11,542 outcomes, including 310 finite
+The lazy iterator matrix contains 11,662 outcomes, including 310 finite
 one/two/three-input `xmap` combinations independently checked against builtin
 Python 2.7 `map`. `xmap` uses longest-input padding and the single-input `None`
 rule of `map`; it is no longer an `itertools.imap` alias. The CPython-side
@@ -138,6 +138,10 @@ frames do not change the reference stack depth. The other lazy builtins retain
 their `itertools` references. Focused cases cover shared sources, exhausted
 sources, more than eight inputs, callback `StopIteration`, and partial-row
 reference cleanup.
+Another 120 outcomes cover `xchain` reentry through direct and `from_iterable`
+construction, nested partial/full consumption, empty/later inputs, and outer
+value/error/exhaustion paths against CPython 2.7 `itertools.chain`. Focused
+cases also check a discarded input whose finalizer advances the chain again.
 
 For a new discrepancy, add a small project-authored case to the relevant local
 module, first confirm its expectations on CPython 2.7.18, and update the exact
